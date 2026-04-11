@@ -8,9 +8,14 @@ type search = {
 	origin : Position.t;
 }
 
+type open_file = {
+	path : string;
+}
+
 type mode =
 	| Edit
 	| Searching of search
+	| Opening_file of open_file
 
 type t = {
 	doc : Doc.t;
@@ -22,6 +27,8 @@ type t = {
 	burst : Position.t option;
 	mode : mode;
 	last_search : string option;
+	mark : Position.t option;
+	yank : string option;
 	undo : snapshot list;
 	redo : snapshot list;
 }

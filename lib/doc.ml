@@ -298,6 +298,44 @@ let find_forward t ~(from : Position.t) ~query =
 				in
 				walk_wrapped 0
 
+let extract_range t ~(start : Position.t) ~(stop : Position.t) =
+	let (a, b) =
+		if (start.line < stop.line)
+			|| (start.line = stop.line && start.column <= stop.column)
+		then (start, stop)
+		else (stop, start)
+	in
+	if Position.equal a b then ""
+	else if a.line = b.line then
+		match get_line a.line t with
+		| None -> ""
+		| Some line ->
+			let sb = Grapheme.byte_of_index line a.column in
+			let eb = Grapheme.byte_of_index line b.column in
+			String.sub line sb (eb - sb)
+	else begin
+		let buf = Buffer.create 256 in
+		(match get_line a.line t with
+		| Some line ->
+			let sb = Grapheme.byte_of_index line a.column in
+			Buffer.add_string buf
+				(String.sub line sb (String.length line - sb))
+		| None -> ());
+		Buffer.add_char buf '\n';
+		for i = a.line + 1 to b.line - 1 do
+			(match get_line i t with
+			| Some line -> Buffer.add_string buf line
+			| None -> ());
+			Buffer.add_char buf '\n'
+		done;
+		(match get_line b.line t with
+		| Some line ->
+			let eb = Grapheme.byte_of_index line b.column in
+			Buffer.add_string buf (String.sub line 0 eb)
+		| None -> ());
+		Buffer.contents buf
+	end
+
 let advance t (p : Position.t) : Position.t =
 	match get_line p.line t with
 	| None -> p

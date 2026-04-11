@@ -7,6 +7,7 @@ type event =
 	| Tab
 	| Escape
 	| Arrow of direction
+	| Shift_arrow of direction
 	| Home
 	| End
 	| Page_up
@@ -71,6 +72,10 @@ let read_escape_sequence () =
 				| "1;5D" -> Word_left
 				| "1;5H" -> Doc_home
 				| "1;5F" -> Doc_end
+				| "1;2A" -> Shift_arrow Up
+				| "1;2B" -> Shift_arrow Down
+				| "1;2C" -> Shift_arrow Right
+				| "1;2D" -> Shift_arrow Left
 				| _ -> Unknown)
 			| _ -> Unknown)
 		| Some 0x4F ->

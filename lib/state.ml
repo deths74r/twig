@@ -8,9 +8,14 @@ type search = {
 	origin : Position.t;
 }
 
+type open_file = {
+	path : string;
+}
+
 type mode =
 	| Edit
 	| Searching of search
+	| Opening_file of open_file
 
 type t = {
 	doc : Doc.t;
@@ -22,6 +27,8 @@ type t = {
 	burst : Position.t option;
 	mode : mode;
 	last_search : string option;
+	mark : Position.t option;
+	yank : string option;
 	undo : snapshot list;
 	redo : snapshot list;
 }
@@ -36,6 +43,8 @@ let empty = {
 	burst = None;
 	mode = Edit;
 	last_search = None;
+	mark = None;
+	yank = None;
 	undo = [];
 	redo = [];
 }
@@ -137,6 +146,7 @@ let apply cmd t =
 			undo;
 			redo = [];
 			burst = Some cursor;
+			mark = None;
 		}
 	| Command.Delete { start_pos; end_pos } ->
 		let undo = snapshot_of t :: t.undo in
@@ -155,9 +165,86 @@ let apply cmd t =
 			undo;
 			redo = [];
 			burst = None;
+			mark = None;
 		}
 	| Command.Move_cursor pos ->
-		{ t with cursor = clamp_cursor t.doc pos; burst = None }
+		{ t with
+			cursor = clamp_cursor t.doc pos;
+			burst = None;
+			mark = None;
+		}
+	| Command.Extend_cursor pos ->
+		let mark =
+			match t.mark with
+			| Some _ -> t.mark
+			| None -> Some t.cursor
+		in
+		{ t with
+			cursor = clamp_cursor t.doc pos;
+			burst = None;
+			mark;
+		}
+	| Command.Set_mark ->
+		{ t with mark = Some t.cursor; message = Some "mark set" }
+	| Command.Clear_mark ->
+		{ t with mark = None }
+	| Command.Copy ->
+		(match t.mark with
+		| None -> { t with message = Some "no selection" }
+		| Some m ->
+			let text = Doc.extract_range t.doc ~start:m ~stop:t.cursor in
+			{ t with
+				yank = Some text;
+				mark = None;
+				message = Some "copied";
+			})
+	| Command.Cut ->
+		(match t.mark with
+		| None -> { t with message = Some "no selection" }
+		| Some m ->
+			let text = Doc.extract_range t.doc ~start:m ~stop:t.cursor in
+			let (a, b) =
+				if (m.line < t.cursor.line)
+					|| (m.line = t.cursor.line && m.column <= t.cursor.column)
+				then (m, t.cursor)
+				else (t.cursor, m)
+			in
+			let doc =
+				Doc.delete_range
+					~start_line:a.line ~start_col:a.column
+					~end_line:b.line ~end_col:b.column
+					t.doc
+			in
+			{ t with
+				doc;
+				cursor = clamp_cursor doc a;
+				yank = Some text;
+				mark = None;
+				dirty = true;
+				undo = snapshot_of t :: t.undo;
+				redo = [];
+				burst = None;
+				message = Some "cut";
+			})
+	| Command.Paste ->
+		(match t.yank with
+		| None -> { t with message = Some "yank buffer empty" }
+		| Some text ->
+			let undo = snapshot_of t :: t.undo in
+			let at = t.cursor in
+			let doc =
+				Doc.insert_at ~line:at.line ~column:at.column text t.doc
+			in
+			let cursor = clamp_cursor doc (cursor_after_insert at text) in
+			{ t with
+				doc;
+				cursor;
+				dirty = true;
+				undo;
+				redo = [];
+				burst = None;
+				mark = None;
+			})
 	| Command.Save -> { (save t) with burst = None }
 	| Command.Quit -> { t with should_quit = true }
 	| Command.Undo ->
@@ -166,14 +253,26 @@ let apply cmd t =
 		| s :: rest ->
 			let redo = snapshot_of t :: t.redo in
 			let t = restore s t in
-			{ t with undo = rest; redo; dirty = true; burst = None })
+			{ t with
+				undo = rest;
+				redo;
+				dirty = true;
+				burst = None;
+				mark = None;
+			})
 	| Command.Redo ->
 		(match t.redo with
 		| [] -> t
 		| s :: rest ->
 			let undo = snapshot_of t :: t.undo in
 			let t = restore s t in
-			{ t with undo; redo = rest; dirty = true; burst = None })
+			{ t with
+				undo;
+				redo = rest;
+				dirty = true;
+				burst = None;
+				mark = None;
+			})
 	| Command.Search_start ->
 		{ t with
 			mode = Searching { query = ""; origin = t.cursor };
@@ -181,7 +280,7 @@ let apply cmd t =
 		}
 	| Command.Search_append s ->
 		(match t.mode with
-		| Edit -> t
+		| Edit | Opening_file _ -> t
 		| Searching search ->
 			let query = search.query ^ s in
 			let cursor =
@@ -195,7 +294,7 @@ let apply cmd t =
 			})
 	| Command.Search_backspace ->
 		(match t.mode with
-		| Edit -> t
+		| Edit | Opening_file _ -> t
 		| Searching search ->
 			let qlen = String.length search.query in
 			if qlen = 0 then t
@@ -217,7 +316,7 @@ let apply cmd t =
 			end)
 	| Command.Search_commit ->
 		(match t.mode with
-		| Edit -> t
+		| Edit | Opening_file _ -> t
 		| Searching search ->
 			{ t with
 				mode = Edit;
@@ -227,7 +326,7 @@ let apply cmd t =
 			})
 	| Command.Search_cancel ->
 		(match t.mode with
-		| Edit -> t
+		| Edit | Opening_file _ -> t
 		| Searching search ->
 			{ t with mode = Edit; cursor = search.origin })
 	| Command.Search_next ->
@@ -239,3 +338,50 @@ let apply cmd t =
 			| Some p -> { t with cursor = p; burst = None }
 			| None ->
 				{ t with message = Some "no more matches" }))
+	| Command.Open_file_start ->
+		let initial =
+			match t.filename with
+			| None -> ""
+			| Some f ->
+				let dir = Filename.dirname f in
+				if dir = "." || dir = "" then ""
+				else dir ^ "/"
+		in
+		{ t with mode = Opening_file { path = initial }; burst = None }
+	| Command.Open_file_append s ->
+		(match t.mode with
+		| Opening_file of_state ->
+			{ t with mode = Opening_file { path = of_state.path ^ s } }
+		| _ -> t)
+	| Command.Open_file_backspace ->
+		(match t.mode with
+		| Opening_file of_state ->
+			let plen = String.length of_state.path in
+			if plen = 0 then t
+			else
+				let path = String.sub of_state.path 0 (plen - 1) in
+				{ t with mode = Opening_file { path } }
+		| _ -> t)
+	| Command.Open_file_cancel ->
+		(match t.mode with
+		| Opening_file _ -> { t with mode = Edit }
+		| _ -> t)
+	| Command.Open_file_commit ->
+		(match t.mode with
+		| Opening_file of_state ->
+			if of_state.path = "" then
+				{ t with mode = Edit; message = Some "no path" }
+			else if t.dirty then
+				{ t with
+					mode = Edit;
+					message = Some "unsaved changes — save first";
+				}
+			else begin
+				try of_file of_state.path
+				with e ->
+					{ t with
+						mode = Edit;
+						message = Some ("open failed: " ^ Printexc.to_string e);
+					}
+			end
+		| _ -> t)

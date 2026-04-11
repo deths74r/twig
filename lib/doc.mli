@@ -36,3 +36,6 @@ val find_forward :
 	t -> from:Position.t -> query:string -> Position.t option
 
 val advance : t -> Position.t -> Position.t
+
+val extract_range :
+	t -> start:Position.t -> stop:Position.t -> string

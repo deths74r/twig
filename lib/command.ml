@@ -2,6 +2,12 @@ type t =
 	| Insert of { at : Position.t; text : string }
 	| Delete of { start_pos : Position.t; end_pos : Position.t }
 	| Move_cursor of Position.t
+	| Extend_cursor of Position.t
+	| Set_mark
+	| Clear_mark
+	| Copy
+	| Cut
+	| Paste
 	| Save
 	| Quit
 	| Undo
@@ -12,6 +18,11 @@ type t =
 	| Search_commit
 	| Search_cancel
 	| Search_next
+	| Open_file_start
+	| Open_file_append of string
+	| Open_file_backspace
+	| Open_file_commit
+	| Open_file_cancel
 
 let apply_to_doc cmd doc =
 	match cmd with
@@ -24,6 +35,10 @@ let apply_to_doc cmd doc =
 			~end_line:end_pos.line
 			~end_col:end_pos.column
 			doc
-	| Move_cursor _ | Save | Quit | Undo | Redo
+	| Move_cursor _ | Extend_cursor _ | Set_mark | Clear_mark
+	| Copy | Cut | Paste
+	| Save | Quit | Undo | Redo
 	| Search_start | Search_append _ | Search_backspace
-	| Search_commit | Search_cancel | Search_next -> doc
+	| Search_commit | Search_cancel | Search_next
+	| Open_file_start | Open_file_append _ | Open_file_backspace
+	| Open_file_commit | Open_file_cancel -> doc

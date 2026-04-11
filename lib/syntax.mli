@@ -10,7 +10,7 @@ type token =
 
 type state =
 	| Normal
-	| In_block_comment
+	| In_block_comment of int
 
 type span = {
 	start : int;
@@ -21,6 +21,7 @@ type span = {
 type language =
 	| Plain
 	| C
+	| Ocaml
 
 val language_of_filename : string option -> language
 

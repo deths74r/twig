@@ -7,6 +7,7 @@ type event =
 	| Tab
 	| Escape
 	| Arrow of direction
+	| Shift_arrow of direction
 	| Home
 	| End
 	| Page_up

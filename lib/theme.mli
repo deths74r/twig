@@ -8,6 +8,10 @@ type t = {
 	preproc : string;
 	text : string;
 	reset : string;
+	selection_enter : string;
+	selection_exit : string;
+	match_enter : string;
+	match_exit : string;
 }
 
 val default : t

@@ -178,7 +178,7 @@ let () =
 		| Searching search ->
 			assert (search.query = "");
 			assert (Position.equal search.origin (pos 0 2))
-		| Edit -> assert false));
+		| Edit | Opening_file _ -> assert false));
 
 	test "search appends move cursor to match" (fun () ->
 		let s = state_of "hello world" in
@@ -212,7 +212,7 @@ let () =
 		assert (Position.equal s.cursor (pos 0 3));
 		(match s.mode with
 		| Edit -> ()
-		| Searching _ -> assert false));
+		| Searching _ | Opening_file _ -> assert false));
 
 	test "search commit saves last_search" (fun () ->
 		let s = state_of "hello world" in
@@ -223,7 +223,7 @@ let () =
 		assert (Position.equal s.cursor (pos 0 6));
 		(match s.mode with
 		| Edit -> ()
-		| Searching _ -> assert false));
+		| Searching _ | Opening_file _ -> assert false));
 
 	test "Search_next advances past current match" (fun () ->
 		let s = state_of "foo foo foo" in
@@ -247,6 +247,179 @@ let () =
 		let s = state_of "hello" in
 		let s' = State.apply Search_next s in
 		assert (Position.equal s'.cursor s.cursor));
+
+	test "Set_mark records cursor position" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply (Move_cursor (pos 0 2)) s in
+		let s = State.apply Set_mark s in
+		assert (s.mark = Some (pos 0 2)));
+
+	test "Move_cursor clears mark" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply Set_mark s in
+		let s = State.apply (Move_cursor (pos 0 3)) s in
+		assert (s.mark = None));
+
+	test "Extend_cursor sets mark if unset then moves" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply (Move_cursor (pos 0 1)) s in
+		let s = State.apply (Extend_cursor (pos 0 4)) s in
+		assert (s.mark = Some (pos 0 1));
+		assert (Position.equal s.cursor (pos 0 4)));
+
+	test "Extend_cursor preserves existing mark" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply (Move_cursor (pos 0 0)) s in
+		let s = State.apply Set_mark s in
+		let s = State.apply (Extend_cursor (pos 0 2)) s in
+		let s = State.apply (Extend_cursor (pos 0 4)) s in
+		assert (s.mark = Some (pos 0 0)));
+
+	test "Copy saves selection to yank" (fun () ->
+		let s = state_of "hello world" in
+		let s = State.apply (Move_cursor (pos 0 6)) s in
+		let s = State.apply Set_mark s in
+		let s = State.apply (Move_cursor (pos 0 11)) s in
+		(* Move_cursor clears mark — use Extend *)
+		let s = { s with mark = Some (pos 0 6) } in
+		let s = State.apply Copy s in
+		assert (s.yank = Some "world");
+		assert (s.mark = None));
+
+	test "Copy with reversed selection still works" (fun () ->
+		let s = state_of "hello" in
+		let s = { s with mark = Some (pos 0 4); cursor = pos 0 1 } in
+		let s = State.apply Copy s in
+		assert (s.yank = Some "ell"));
+
+	test "Cut removes selection and yanks it" (fun () ->
+		let s = state_of "hello world" in
+		let s = { s with mark = Some (pos 0 5); cursor = pos 0 11 } in
+		let s = State.apply Cut s in
+		assert (s.yank = Some " world");
+		assert (Doc.get_line 0 s.doc = Some "hello");
+		assert (Position.equal s.cursor (pos 0 5)));
+
+	test "Paste inserts yank at cursor" (fun () ->
+		let s = state_of "hello" in
+		let s = { s with yank = Some " world"; cursor = pos 0 5 } in
+		let s = State.apply Paste s in
+		assert (Doc.get_line 0 s.doc = Some "hello world");
+		assert (Position.equal s.cursor (pos 0 11)));
+
+	test "Paste with no yank is a no-op" (fun () ->
+		let s = state_of "abc" in
+		let s = State.apply Paste s in
+		assert (Doc.get_line 0 s.doc = Some "abc"));
+
+	test "Cut across lines joins them" (fun () ->
+		let s = state_of "hello\nworld" in
+		let s = { s with mark = Some (pos 0 5); cursor = pos 1 0 } in
+		let s = State.apply Cut s in
+		assert (Doc.line_count s.doc = 1);
+		assert (Doc.get_line 0 s.doc = Some "helloworld");
+		assert (s.yank = Some "\n"));
+
+	test "Paste multi-line inserts new lines" (fun () ->
+		let s = state_of "abc" in
+		let s = { s with yank = Some "X\nY"; cursor = pos 0 1 } in
+		let s = State.apply Paste s in
+		assert (Doc.line_count s.doc = 2);
+		assert (Doc.get_line 0 s.doc = Some "aX");
+		assert (Doc.get_line 1 s.doc = Some "Ybc"));
+
+	test "Cut and Paste roundtrip preserves text" (fun () ->
+		let s = state_of "hello world" in
+		let s = { s with mark = Some (pos 0 6); cursor = pos 0 11 } in
+		let s = State.apply Cut s in
+		let s = State.apply (Move_cursor (pos 0 0)) s in
+		let s = State.apply Paste s in
+		assert (Doc.get_line 0 s.doc = Some "worldhello "));
+
+	test "Open_file_start enters Opening_file mode" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply Open_file_start s in
+		(match s.mode with
+		| Opening_file of_state -> assert (of_state.path = "")
+		| _ -> assert false));
+
+	test "Open_file_start prefills dirname of current file" (fun () ->
+		let s = { State.empty with filename = Some "/tmp/foo/bar.txt" } in
+		let s = State.apply Open_file_start s in
+		(match s.mode with
+		| Opening_file of_state -> assert (of_state.path = "/tmp/foo/")
+		| _ -> assert false));
+
+	test "Open_file_append extends path" (fun () ->
+		let s = State.apply Open_file_start State.empty in
+		let s = State.apply (Open_file_append "a") s in
+		let s = State.apply (Open_file_append "bc") s in
+		(match s.mode with
+		| Opening_file of_state -> assert (of_state.path = "abc")
+		| _ -> assert false));
+
+	test "Open_file_backspace shrinks path" (fun () ->
+		let s = State.apply Open_file_start State.empty in
+		let s = State.apply (Open_file_append "hello") s in
+		let s = State.apply Open_file_backspace s in
+		(match s.mode with
+		| Opening_file of_state -> assert (of_state.path = "hell")
+		| _ -> assert false));
+
+	test "Open_file_cancel returns to Edit without loading" (fun () ->
+		let s = state_of "original" in
+		let s = State.apply Open_file_start s in
+		let s = State.apply (Open_file_append "nonexistent") s in
+		let s = State.apply Open_file_cancel s in
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false);
+		assert (Doc.get_line 0 s.doc = Some "original"));
+
+	test "Open_file_commit refuses if dirty" (fun () ->
+		let path = Filename.temp_file "twig_test_" ".txt" in
+		let oc = open_out path in
+		output_string oc "from disk";
+		close_out oc;
+		let s = { State.empty with
+			doc = Doc.of_string "unsaved";
+			dirty = true;
+		} in
+		let s = State.apply Open_file_start s in
+		let s = State.apply (Open_file_append path) s in
+		let s = State.apply Open_file_commit s in
+		Sys.remove path;
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false);
+		assert (Doc.get_line 0 s.doc = Some "unsaved");
+		assert (s.message <> None));
+
+	test "Open_file_commit loads file when clean" (fun () ->
+		let path = Filename.temp_file "twig_test_" ".txt" in
+		let oc = open_out path in
+		output_string oc "line1\nline2";
+		close_out oc;
+		let s = State.apply Open_file_start State.empty in
+		let s = State.apply (Open_file_append path) s in
+		let s = State.apply Open_file_commit s in
+		Sys.remove path;
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false);
+		assert (Doc.line_count s.doc = 2);
+		assert (s.filename = Some path));
+
+	test "Open_file_commit creates new file for missing path" (fun () ->
+		let path = "/tmp/twig_definitely_does_not_exist_xyz.txt" in
+		let s = State.apply Open_file_start State.empty in
+		let s = State.apply (Open_file_append path) s in
+		let s = State.apply Open_file_commit s in
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false);
+		assert (s.filename = Some path);
+		assert (Doc.line_count s.doc = 0));
 
 	test "of_file loads doc and sets filename" (fun () ->
 		let path = Filename.temp_file "twig_test_" ".txt" in

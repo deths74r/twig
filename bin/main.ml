@@ -23,6 +23,16 @@ let command_in_search (event : Input.event) : Command.t option =
 	| Ctrl 'c' -> Some Search_cancel
 	| _ -> None
 
+let command_in_open_file (event : Input.event) : Command.t option =
+	match event with
+	| Char u ->
+		Some (Open_file_append (uchar_to_string u))
+	| Backspace -> Some Open_file_backspace
+	| Enter -> Some Open_file_commit
+	| Escape -> Some Open_file_cancel
+	| Ctrl 'c' -> Some Open_file_cancel
+	| _ -> None
+
 let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 		: Command.t option =
 	let cursor = state.cursor in
@@ -78,6 +88,24 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 		else if cursor.line + 1 < Doc.line_count state.doc then
 			Some (Move_cursor { line = cursor.line + 1; column = 0 })
 		else None
+	| Shift_arrow Up ->
+		Some (Extend_cursor { cursor with line = cursor.line - 1 })
+	| Shift_arrow Down ->
+		Some (Extend_cursor { cursor with line = cursor.line + 1 })
+	| Shift_arrow Left ->
+		if cursor.column > 0 then
+			Some (Extend_cursor { cursor with column = cursor.column - 1 })
+		else if cursor.line > 0 then
+			let prev_len = line_length state (cursor.line - 1) in
+			Some (Extend_cursor { line = cursor.line - 1; column = prev_len })
+		else None
+	| Shift_arrow Right ->
+		let len = line_length state cursor.line in
+		if cursor.column < len then
+			Some (Extend_cursor { cursor with column = cursor.column + 1 })
+		else if cursor.line + 1 < Doc.line_count state.doc then
+			Some (Extend_cursor { line = cursor.line + 1; column = 0 })
+		else None
 	| Home ->
 		Some (Move_cursor { cursor with column = 0 })
 	| End ->
@@ -122,12 +150,19 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 	| Ctrl 'y' -> Some Redo
 	| Ctrl 'f' -> Some Search_start
 	| Ctrl 'n' -> Some Search_next
+	| Ctrl 'o' -> Some Open_file_start
+	| Ctrl 'g' -> Some Set_mark
+	| Ctrl 'c' -> Some Copy
+	| Ctrl 'x' -> Some Cut
+	| Ctrl 'v' -> Some Paste
 	| Eof -> Some Quit
-	| Escape | Ctrl _ | Unknown -> None
+	| Escape -> Some Clear_mark
+	| Ctrl _ | Unknown -> None
 
 let command_of_event ui (state : State.t) event =
 	match state.mode with
 	| Searching _ -> command_in_search event
+	| Opening_file _ -> command_in_open_file event
 	| Edit -> command_in_edit ui state event
 
 let initial_state () =
@@ -150,7 +185,14 @@ let main_loop (initial_state : State.t) (initial_ui : Ui.t) =
 		Terminal.write frame;
 		let event = Input.read () in
 		match command_of_event !ui !state event with
-		| Some cmd -> state := State.apply cmd !state
+		| Some cmd ->
+			state := State.apply cmd !state;
+			(match cmd with
+			| Copy | Cut ->
+				(match (!state).yank with
+				| Some s -> Terminal.write (Clipboard.osc52_set s)
+				| None -> ())
+			| _ -> ())
 		| None -> ()
 	done
 
