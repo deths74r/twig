@@ -22,6 +22,8 @@ type language =
 	| Plain
 	| C
 	| Ocaml
+	| Dune
+	| Opam
 
 val language_of_filename : string option -> language
 

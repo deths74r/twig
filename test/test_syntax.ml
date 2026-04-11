@@ -99,7 +99,12 @@ let () =
 		assert (Syntax.language_of_filename (Some "foo.ml") = Ocaml);
 		assert (Syntax.language_of_filename (Some "foo.mli") = Ocaml);
 		assert (Syntax.language_of_filename (Some "foo.txt") = Plain);
-		assert (Syntax.language_of_filename None = Plain));
+		assert (Syntax.language_of_filename None = Plain);
+		assert (Syntax.language_of_filename (Some "dune") = Dune);
+		assert (Syntax.language_of_filename (Some "dune-project") = Dune);
+		assert (Syntax.language_of_filename (Some "src/dune") = Dune);
+		assert (Syntax.language_of_filename (Some "twig.opam") = Opam);
+		assert (Syntax.language_of_filename (Some "opam") = Opam));
 
 	test "OCaml let keyword" (fun () ->
 		let spans, _ =
@@ -144,12 +149,60 @@ let () =
 		let spans, _ =
 			Syntax.tokenize_line "let x' = 0" Normal Ocaml
 		in
-		(* x' should be one identifier, not x followed by '=' as char lit *)
 		let text_spans =
 			List.filter
 				(fun (s : Syntax.span) -> s.kind = Text)
 				spans
 		in
 		assert (List.length text_spans >= 1));
+
+	test "Dune stanza keyword" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "(library (name twig))" Normal Dune
+		in
+		assert (token_at_offset spans 1 = Some Keyword);
+		assert (token_at_offset spans 10 = Some Type_kw));
+
+	test "Dune line comment" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "(library) ; trailing" Normal Dune
+		in
+		assert (token_at_offset spans 10 = Some Comment));
+
+	test "Dune block comment spans lines" (fun () ->
+		let _, st1 =
+			Syntax.tokenize_line "#| start" Normal Dune
+		in
+		(match st1 with
+		| In_block_comment _ -> ()
+		| _ -> assert false);
+		let _, st2 =
+			Syntax.tokenize_line "end |#" st1 Dune
+		in
+		assert (st2 = Syntax.Normal));
+
+	test "Dune string literal" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "(name \"hello\")" Normal Dune
+		in
+		assert (token_at_offset spans 7 = Some String_lit));
+
+	test "Opam field keyword" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "opam-version: \"2.0\"" Normal Opam
+		in
+		assert (token_at_offset spans 0 = Some Keyword));
+
+	test "Opam comment" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "name: \"x\" # trailing" Normal Opam
+		in
+		assert (token_at_offset spans 11 = Some Comment));
+
+	test "Opam variable interpolation" (fun () ->
+		let spans, _ =
+			Syntax.tokenize_line "%{name}%" Normal Opam
+		in
+		assert (token_at_offset spans 0 = Some Preproc));
 
 	print_endline "all syntax tests passed"
