@@ -18,8 +18,10 @@ type event =
 	| Word_right
 	| Doc_home
 	| Doc_end
+	| Alt of char
 	| Ctrl of char
 	| Eof
+	| Resize
 	| Unknown
 
 val read : unit -> event

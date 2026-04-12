@@ -34,9 +34,99 @@ let iter_clusters f s =
 
 type style = Plain | Selected | Matched
 
-let emit_spans buf line spans (theme : Theme.t) start_col max_width
-		sel_range match_ranges =
-	let col = ref start_col in
+type segment = {
+	start_gi : int;
+	end_gi : int;
+}
+
+let measure_cluster col cluster =
+	if cluster = "\t" then
+		let next = ((col / tab_width) + 1) * tab_width in
+		next - col
+	else
+		Grapheme.display_width cluster
+
+let wrap_line line max_width =
+	if max_width <= 0 || line = "" then
+		[{ start_gi = 0; end_gi = Grapheme.count line }]
+	else begin
+		let segments = ref [] in
+		let seg_start = ref 0 in
+		let grapheme_idx = ref 0 in
+		let col = ref 0 in
+		iter_clusters (fun cluster ->
+			let w = measure_cluster !col cluster in
+			if !col + w > max_width && !col > 0 then begin
+				segments :=
+					{ start_gi = !seg_start; end_gi = !grapheme_idx }
+					:: !segments;
+				seg_start := !grapheme_idx;
+				col := 0
+			end;
+			let w_actual = measure_cluster !col cluster in
+			col := !col + w_actual;
+			incr grapheme_idx
+		) line;
+		segments :=
+			{ start_gi = !seg_start; end_gi = !grapheme_idx } :: !segments;
+		List.rev !segments
+	end
+
+let find_segment_index segments cursor_gi =
+	let rec loop idx = function
+		| [] -> max 0 (idx - 1)
+		| [_] -> idx
+		| seg :: rest ->
+			if cursor_gi >= seg.start_gi && cursor_gi < seg.end_gi then idx
+			else loop (idx + 1) rest
+	in
+	loop 0 segments
+
+let cursor_col_in_segment line (seg : segment) cursor_gi =
+	let col = ref 0 in
+	let grapheme_idx = ref 0 in
+	let done_ = ref false in
+	iter_clusters (fun cluster ->
+		if !done_ then ()
+		else if !grapheme_idx < seg.start_gi then
+			incr grapheme_idx
+		else if !grapheme_idx >= cursor_gi then
+			done_ := true
+		else begin
+			let w = measure_cluster !col cluster in
+			col := !col + w;
+			incr grapheme_idx
+		end
+	) line;
+	!col
+
+let grapheme_at_col_in_segment line (seg : segment) target_col =
+	let col = ref 0 in
+	let grapheme_idx = ref 0 in
+	let result = ref seg.end_gi in
+	let found = ref false in
+	iter_clusters (fun cluster ->
+		if !found then ()
+		else if !grapheme_idx < seg.start_gi then
+			incr grapheme_idx
+		else if !grapheme_idx >= seg.end_gi then begin
+			result := seg.end_gi;
+			found := true
+		end else if !col >= target_col then begin
+			result := !grapheme_idx;
+			found := true
+		end else begin
+			let w = measure_cluster !col cluster in
+			col := !col + w;
+			incr grapheme_idx
+		end
+	) line;
+	if not !found then result := !grapheme_idx;
+	!result
+
+let emit_segment buf line spans (theme : Theme.t) (seg : segment)
+		max_width sel_range match_ranges =
+	let col = ref 0 in
 	let grapheme_idx = ref 0 in
 	let stopped = ref false in
 	let current = ref Plain in
@@ -69,10 +159,18 @@ let emit_spans buf line spans (theme : Theme.t) start_col max_width
 		else begin
 			let text = String.sub line span.start span.length in
 			let syntax_color = Theme.color_for theme span.kind in
-			if !current = Plain then Buffer.add_string buf syntax_color;
+			let span_color_emitted = ref false in
 			iter_clusters (fun cluster ->
 				if !stopped then ()
+				else if !grapheme_idx >= seg.end_gi then
+					stopped := true
+				else if !grapheme_idx < seg.start_gi then
+					incr grapheme_idx
 				else begin
+					if not !span_color_emitted && !current = Plain then begin
+						Buffer.add_string buf syntax_color;
+						span_color_emitted := true
+					end;
 					let want = desired_style !grapheme_idx in
 					if want <> !current then begin
 						exit_style !current;
@@ -102,25 +200,17 @@ let emit_spans buf line spans (theme : Theme.t) start_col max_width
 	exit_style !current;
 	Buffer.add_string buf theme.reset
 
-let prefix_display_col prefix =
-	let col = ref 0 in
-	iter_clusters (fun cluster ->
-		if cluster = "\t" then
-			col := ((!col / tab_width) + 1) * tab_width
-		else
-			col := !col + Grapheme.display_width cluster
-	) prefix;
-	!col
-
 let digits_of n =
 	if n <= 0 then 1
 	else
 		let rec loop n acc = if n = 0 then acc else loop (n / 10) (acc + 1) in
 		loop n 0
 
-let gutter_width (state : State.t) =
-	let n = Doc.line_count state.doc in
-	digits_of (max 1 n) + 1
+let gutter_width (state : State.t) (ui : Ui.t) =
+	if not ui.show_line_numbers then 0
+	else
+		let n = Doc.line_count state.doc in
+		digits_of (max 1 n) + 1
 
 let find_all_in_line line query =
 	if query = "" then []
@@ -180,33 +270,75 @@ let initial_syntax_state (state : State.t) (ui : Ui.t) lang =
 
 let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 	let lang = Syntax.language_of_filename state.filename in
-	let gutter = gutter_width state in
-	let content_max = max 0 (ui.cols - gutter) in
+	let gutter = gutter_width state ui in
+	let content_max = max 1 (ui.cols - gutter) in
+	let wrap_limit = if ui.wrap then content_max else max_int / 2 in
 	let ch = Ui.content_rows ui in
 	let syntax_state = ref (initial_syntax_state state ui lang) in
-	for screen_row = 0 to ch - 1 do
-		let doc_row = ui.top_line + screen_row in
-		move_cursor buf screen_row 0;
-		clear_line buf;
-		match Doc.get_line doc_row state.doc with
-		| Some line ->
-			let num_str =
-				Printf.sprintf "%*d " (gutter - 1) (doc_row + 1)
+	let screen_row = ref 0 in
+	let doc_row = ref ui.top_line in
+	let cursor_screen = ref None in
+	let total_lines = Doc.line_count state.doc in
+	while !screen_row < ch do
+		if !doc_row >= total_lines then begin
+			move_cursor buf !screen_row 0;
+			clear_line buf;
+			Buffer.add_string buf (String.make gutter ' ');
+			Buffer.add_char buf '~';
+			incr screen_row;
+			incr doc_row
+		end else begin
+			let line =
+				Option.value (Doc.get_line !doc_row state.doc) ~default:""
 			in
-			Buffer.add_string buf "\x1b[90m";
-			Buffer.add_string buf num_str;
-			Buffer.add_string buf theme.reset;
 			let spans, next_state =
 				Syntax.tokenize_line line !syntax_state lang
 			in
 			syntax_state := next_state;
-			let sel = line_selection_range state doc_row in
+			let segments = wrap_line line wrap_limit in
+			let n_segs = List.length segments in
+			let sel = line_selection_range state !doc_row in
 			let matches = line_match_ranges state line in
-			emit_spans buf line spans theme 0 content_max sel matches
-		| None ->
-			Buffer.add_string buf (String.make gutter ' ');
-			Buffer.add_char buf '~'
-	done
+			List.iteri (fun seg_idx (seg : segment) ->
+				if !screen_row < ch then begin
+					move_cursor buf !screen_row 0;
+					clear_line buf;
+					if gutter > 0 then begin
+						if seg_idx = 0 then begin
+							let num_str =
+								Printf.sprintf "%*d "
+									(gutter - 1) (!doc_row + 1)
+							in
+							Buffer.add_string buf "\x1b[90m";
+							Buffer.add_string buf num_str;
+							Buffer.add_string buf theme.reset
+						end else
+							Buffer.add_string buf (String.make gutter ' ')
+					end;
+					emit_segment buf line spans theme seg content_max
+						sel matches;
+					(if !doc_row = state.cursor.line then begin
+						let c = state.cursor.column in
+						let is_last = seg_idx = n_segs - 1 in
+						let in_seg =
+							c >= seg.start_gi
+							&& (c < seg.end_gi || (is_last && c = seg.end_gi))
+						in
+						if in_seg then begin
+							let col_in_seg =
+								cursor_col_in_segment line seg c
+							in
+							cursor_screen :=
+								Some (!screen_row, gutter + col_in_seg)
+						end
+					end);
+					incr screen_row
+				end
+			) segments;
+			incr doc_row
+		end
+	done;
+	!cursor_screen
 
 let draw_status_bar buf (state : State.t) (ui : Ui.t) =
 	let row = ui.rows - 2 in
@@ -249,20 +381,110 @@ let draw_message_bar buf (state : State.t) (ui : Ui.t) =
 			Buffer.add_string buf (Grapheme.truncate_to_width m ui.cols)
 		| None -> ()
 
-let cursor_display_col (state : State.t) =
-	match Doc.get_line state.cursor.line state.doc with
-	| None -> 0
-	| Some line ->
-		let byte_idx = Grapheme.byte_of_index line state.cursor.column in
-		let prefix = String.sub line 0 byte_idx in
-		prefix_display_col prefix
+
+let adjust_viewport (state : State.t) (ui : Ui.t) wrap_limit =
+	let top = ref ui.top_line in
+	if state.cursor.line < !top then top := state.cursor.line;
+	let ch = Ui.content_rows ui in
+	let cursor_visible top_line =
+		let rows = ref 0 in
+		let i = ref top_line in
+		let visible = ref false in
+		let n = Doc.line_count state.doc in
+		let stop = ref false in
+		while not !stop && !rows < ch && !i < n do
+			let line =
+				Option.value (Doc.get_line !i state.doc) ~default:""
+			in
+			let segs = wrap_line line wrap_limit in
+			let cnt = List.length segs in
+			if !i = state.cursor.line then begin
+				let seg_idx = find_segment_index segs state.cursor.column in
+				if !rows + seg_idx < ch then visible := true;
+				stop := true
+			end else begin
+				rows := !rows + cnt;
+				incr i
+			end
+		done;
+		!visible
+	in
+	while !top < state.cursor.line && not (cursor_visible !top) do
+		incr top
+	done;
+	{ ui with top_line = max 0 !top }
+
+let vertical_move (state : State.t) (ui : Ui.t) direction =
+	let gutter = gutter_width state ui in
+	let content_max = max 1 (ui.cols - gutter) in
+	let wrap_limit = if ui.wrap then content_max else max_int / 2 in
+	let line_text =
+		Option.value (Doc.get_line state.cursor.line state.doc) ~default:""
+	in
+	let segments = wrap_line line_text wrap_limit in
+	let cur_seg_idx = find_segment_index segments state.cursor.column in
+	let cur_seg = List.nth segments cur_seg_idx in
+	let target_col =
+		cursor_col_in_segment line_text cur_seg state.cursor.column
+	in
+	let n_segs = List.length segments in
+	match direction with
+	| `Up ->
+		if cur_seg_idx > 0 then begin
+			let prev_seg = List.nth segments (cur_seg_idx - 1) in
+			let gi =
+				grapheme_at_col_in_segment line_text prev_seg target_col
+			in
+			Some { Position.line = state.cursor.line; column = gi }
+		end
+		else if state.cursor.line > 0 then begin
+			let prev_line_idx = state.cursor.line - 1 in
+			let prev_line =
+				Option.value
+					(Doc.get_line prev_line_idx state.doc) ~default:""
+			in
+			let prev_segs = wrap_line prev_line wrap_limit in
+			let last_seg =
+				List.nth prev_segs (List.length prev_segs - 1)
+			in
+			let gi =
+				grapheme_at_col_in_segment prev_line last_seg target_col
+			in
+			Some { line = prev_line_idx; column = gi }
+		end
+		else None
+	| `Down ->
+		if cur_seg_idx + 1 < n_segs then begin
+			let next_seg = List.nth segments (cur_seg_idx + 1) in
+			let gi =
+				grapheme_at_col_in_segment line_text next_seg target_col
+			in
+			Some { Position.line = state.cursor.line; column = gi }
+		end
+		else if state.cursor.line + 1 < Doc.line_count state.doc then begin
+			let next_line_idx = state.cursor.line + 1 in
+			let next_line =
+				Option.value
+					(Doc.get_line next_line_idx state.doc) ~default:""
+			in
+			let next_segs = wrap_line next_line wrap_limit in
+			let first_seg = List.hd next_segs in
+			let gi =
+				grapheme_at_col_in_segment next_line first_seg target_col
+			in
+			Some { line = next_line_idx; column = gi }
+		end
+		else None
 
 let frame ?(theme = Theme.default) (state : State.t) (ui : Ui.t) =
-	let ui = Ui.adjust_viewport state ui in
+	let gutter = gutter_width state ui in
+	let content_max = max 1 (ui.cols - gutter) in
+	let wrap_limit = if ui.wrap then content_max else max_int / 2 in
+	let ui = adjust_viewport state ui wrap_limit in
 	let buf = Buffer.create 4096 in
 	hide_cursor buf;
 	move_cursor buf 0 0;
-	draw_content buf state ui theme;
+	let cursor_screen = draw_content buf state ui theme in
 	draw_status_bar buf state ui;
 	draw_message_bar buf state ui;
 	(match state.mode with
@@ -271,8 +493,8 @@ let frame ?(theme = Theme.default) (state : State.t) (ui : Ui.t) =
 		let col = 6 + Grapheme.display_width of_state.path in
 		move_cursor buf row col
 	| _ ->
-		let cursor_row = state.cursor.line - ui.top_line in
-		let cursor_col = gutter_width state + cursor_display_col state in
-		move_cursor buf cursor_row cursor_col);
+		(match cursor_screen with
+		| Some (r, c) -> move_cursor buf r c
+		| None -> move_cursor buf 0 0));
 	show_cursor buf;
 	(ui, Buffer.contents buf)

@@ -94,9 +94,13 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 				Some (Delete { start_pos = cursor; end_pos })
 			else None)
 	| Arrow Up ->
-		Some (Move_cursor { cursor with line = cursor.line - 1 })
+		(match Render.vertical_move state ui `Up with
+		| Some p -> Some (Move_cursor p)
+		| None -> None)
 	| Arrow Down ->
-		Some (Move_cursor { cursor with line = cursor.line + 1 })
+		(match Render.vertical_move state ui `Down with
+		| Some p -> Some (Move_cursor p)
+		| None -> None)
 	| Arrow Left ->
 		if cursor.column > 0 then
 			Some (Move_cursor { cursor with column = cursor.column - 1 })
@@ -112,9 +116,13 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 			Some (Move_cursor { line = cursor.line + 1; column = 0 })
 		else None
 	| Shift_arrow Up ->
-		Some (Extend_cursor { cursor with line = cursor.line - 1 })
+		(match Render.vertical_move state ui `Up with
+		| Some p -> Some (Extend_cursor p)
+		| None -> None)
 	| Shift_arrow Down ->
-		Some (Extend_cursor { cursor with line = cursor.line + 1 })
+		(match Render.vertical_move state ui `Down with
+		| Some p -> Some (Extend_cursor p)
+		| None -> None)
 	| Shift_arrow Left ->
 		if cursor.column > 0 then
 			Some (Extend_cursor { cursor with column = cursor.column - 1 })
@@ -178,9 +186,11 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 	| Ctrl 'c' -> Some Copy
 	| Ctrl 'x' -> Some Cut
 	| Ctrl 'v' -> Some Paste
+	| Alt 'z' -> Some Toggle_wrap
+	| Alt 'l' -> Some Toggle_line_numbers
 	| Eof -> Some Quit
 	| Escape -> Some Clear_mark
-	| Ctrl _ | Unknown -> None
+	| Resize | Alt _ | Ctrl _ | Unknown -> None
 
 let command_of_event ui (state : State.t) event =
 	match state.mode with
@@ -215,6 +225,12 @@ let main_loop (initial_state : State.t) (initial_ui : Ui.t) =
 				(match (!state).yank with
 				| Some s -> Terminal.write (Clipboard.osc52_set s)
 				| None -> ())
+			| Toggle_wrap ->
+				ui := { !ui with wrap = not (!ui).wrap }
+			| Toggle_line_numbers ->
+				ui := { !ui with
+					show_line_numbers = not (!ui).show_line_numbers
+				}
 			| _ -> ())
 		| None -> ()
 	done

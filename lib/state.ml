@@ -520,6 +520,8 @@ let apply cmd t =
 		(match t.mode with
 		| Opening_file _ -> { t with mode = Edit }
 		| _ -> t)
+	| Command.Toggle_wrap -> t
+	| Command.Toggle_line_numbers -> t
 	| Command.Open_file_commit ->
 		(match t.mode with
 		| Opening_file of_state ->

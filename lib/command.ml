@@ -26,6 +26,8 @@ type t =
 	| Open_file_backspace
 	| Open_file_commit
 	| Open_file_cancel
+	| Toggle_wrap
+	| Toggle_line_numbers
 
 let apply_to_doc cmd doc =
 	match cmd with
@@ -45,4 +47,5 @@ let apply_to_doc cmd doc =
 	| Search_start | Search_append _ | Search_backspace
 	| Search_commit | Search_cancel | Search_next
 	| Open_file_start | Open_file_append _ | Open_file_backspace
-	| Open_file_commit | Open_file_cancel -> doc
+	| Open_file_commit | Open_file_cancel
+	| Toggle_wrap | Toggle_line_numbers -> doc

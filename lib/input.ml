@@ -18,8 +18,10 @@ type event =
 	| Word_right
 	| Doc_home
 	| Doc_end
+	| Alt of char
 	| Ctrl of char
 	| Eof
+	| Resize
 	| Unknown
 
 exception Eof_reached
@@ -85,6 +87,7 @@ let read_escape_sequence () =
 			| Some 0x48 -> Home
 			| Some 0x46 -> End
 			| _ -> Unknown)
+		| Some b when b >= 0x20 && b < 0x7F -> Alt (Char.chr b)
 		| _ -> Unknown
 
 let decode_utf8 lead =
@@ -116,17 +119,30 @@ let decode_utf8 lead =
 	end
 
 let rec read () =
-	try
-		match read_byte () with
-		| None -> read ()
-		| Some 0x1B -> read_escape_sequence ()
-		| Some 0x0D | Some 0x0A -> Enter
-		| Some 0x09 -> Tab
-		| Some 0x7F -> Backspace
-		| Some b when b < 0x20 -> Ctrl (Char.chr (b + 0x60))
-		| Some b when b < 0x80 -> Char (Uchar.of_int b)
-		| Some b ->
-			(match decode_utf8 b with
-			| Some u -> Char u
-			| None -> Unknown)
-	with Eof_reached -> Eof
+	if Terminal.resize_flag () then Resize
+	else begin
+		let ready =
+			try
+				let r, _, _ = Unix.select [Unix.stdin] [] [] 0.1 in
+				r
+			with Unix.Unix_error (Unix.EINTR, _, _) -> []
+		in
+		if ready = [] then read ()
+		else
+			try
+				match read_byte () with
+				| None ->
+					if Terminal.resize_flag () then Resize
+					else read ()
+				| Some 0x1B -> read_escape_sequence ()
+				| Some 0x0D | Some 0x0A -> Enter
+				| Some 0x09 -> Tab
+				| Some 0x7F -> Backspace
+				| Some b when b < 0x20 -> Ctrl (Char.chr (b + 0x60))
+				| Some b when b < 0x80 -> Char (Uchar.of_int b)
+				| Some b ->
+					(match decode_utf8 b with
+					| Some u -> Char u
+					| None -> Unknown)
+			with Eof_reached -> Eof
+	end
