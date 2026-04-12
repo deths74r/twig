@@ -5,6 +5,7 @@ type event =
 	| Enter
 	| Backspace
 	| Tab
+	| Shift_tab
 	| Escape
 	| Arrow of direction
 	| Shift_arrow of direction

@@ -5,6 +5,7 @@ type event =
 	| Enter
 	| Backspace
 	| Tab
+	| Shift_tab
 	| Escape
 	| Arrow of direction
 	| Shift_arrow of direction
@@ -50,6 +51,7 @@ let read_escape_sequence () =
 			| Some 0x44 -> Arrow Left
 			| Some 0x48 -> Home
 			| Some 0x46 -> End
+			| Some 0x5A -> Shift_tab
 			| Some b when b >= 0x30 && b <= 0x39 ->
 				let buf = Buffer.create 8 in
 				Buffer.add_char buf (Char.chr b);

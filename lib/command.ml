@@ -1,6 +1,9 @@
 type t =
 	| Insert of { at : Position.t; text : string }
+	| Insert_newline
 	| Delete of { start_pos : Position.t; end_pos : Position.t }
+	| Indent_block
+	| Outdent_block
 	| Move_cursor of Position.t
 	| Extend_cursor of Position.t
 	| Set_mark
@@ -35,6 +38,7 @@ let apply_to_doc cmd doc =
 			~end_line:end_pos.line
 			~end_col:end_pos.column
 			doc
+	| Insert_newline | Indent_block | Outdent_block
 	| Move_cursor _ | Extend_cursor _ | Set_mark | Clear_mark
 	| Copy | Cut | Paste
 	| Save | Quit | Undo | Redo

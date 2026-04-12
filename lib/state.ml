@@ -124,21 +124,69 @@ let save t =
 				message = Some ("save failed: " ^ Printexc.to_string e);
 			}
 
+let consume_selection t =
+	match t.mark with
+	| None -> t
+	| Some m ->
+		let cursor = t.cursor in
+		let (a, b) =
+			if (m.line < cursor.line)
+				|| (m.line = cursor.line && m.column <= cursor.column)
+			then (m, cursor)
+			else (cursor, m)
+		in
+		if Position.equal a b then { t with mark = None }
+		else begin
+			let doc =
+				Doc.delete_range t.doc
+					~start_line:a.line ~start_col:a.column
+					~end_line:b.line ~end_col:b.column
+			in
+			{ t with doc; cursor = a; mark = None }
+		end
+
+let leading_ws_len s =
+	let n = String.length s in
+	let rec loop i =
+		if i >= n then i
+		else match s.[i] with
+			| ' ' | '\t' -> loop (i + 1)
+			| _ -> i
+	in
+	loop 0
+
 let apply cmd t =
 	let t = { t with message = None } in
 	match cmd with
 	| Command.Insert { at; text } ->
+		let had_mark = t.mark <> None in
 		let continue_burst =
-			match t.burst with
-			| Some p -> Position.equal p at
-			| None -> false
+			if had_mark then false
+			else
+				match t.burst with
+				| Some p -> Position.equal p at
+				| None -> false
 		in
 		let undo =
 			if continue_burst then t.undo
 			else snapshot_of t :: t.undo
 		in
-		let doc = Doc.insert_at ~line:at.line ~column:at.column text t.doc in
-		let cursor = clamp_cursor doc (cursor_after_insert at text) in
+		let t, effective_at =
+			if had_mark then
+				let t = consume_selection t in
+				(t, t.cursor)
+			else
+				(t, at)
+		in
+		let doc =
+			Doc.insert_at
+				~line:effective_at.line
+				~column:effective_at.column
+				text t.doc
+		in
+		let cursor =
+			clamp_cursor doc (cursor_after_insert effective_at text)
+		in
 		{ t with
 			doc;
 			cursor;
@@ -147,6 +195,107 @@ let apply cmd t =
 			redo = [];
 			burst = Some cursor;
 			mark = None;
+		}
+	| Command.Insert_newline ->
+		let undo = snapshot_of t :: t.undo in
+		let t =
+			match t.mark with
+			| None -> t
+			| Some _ -> consume_selection t
+		in
+		let line_text =
+			Option.value (Doc.get_line t.cursor.line t.doc) ~default:""
+		in
+		let indent_end = leading_ws_len line_text in
+		let cursor_byte = Grapheme.byte_of_index line_text t.cursor.column in
+		let indent =
+			if cursor_byte >= indent_end then String.sub line_text 0 indent_end
+			else ""
+		in
+		let text = "\n" ^ indent in
+		let at = t.cursor in
+		let doc =
+			Doc.insert_at ~line:at.line ~column:at.column text t.doc
+		in
+		let cursor = clamp_cursor doc (cursor_after_insert at text) in
+		{ t with
+			doc;
+			cursor;
+			dirty = true;
+			undo;
+			redo = [];
+			burst = None;
+			mark = None;
+		}
+	| Command.Indent_block ->
+		let a, b =
+			match t.mark with
+			| None -> (t.cursor.line, t.cursor.line)
+			| Some m ->
+				(min m.line t.cursor.line, max m.line t.cursor.line)
+		in
+		let doc = ref t.doc in
+		for i = a to b do
+			doc := Doc.insert_at ~line:i ~column:0 "\t" !doc
+		done;
+		let shift (pos : Position.t) =
+			if pos.line >= a && pos.line <= b then
+				{ pos with column = pos.column + 1 }
+			else pos
+		in
+		{ t with
+			doc = !doc;
+			cursor = shift t.cursor;
+			mark = Option.map shift t.mark;
+			dirty = true;
+			undo = snapshot_of t :: t.undo;
+			redo = [];
+			burst = None;
+		}
+	| Command.Outdent_block ->
+		let a, b =
+			match t.mark with
+			| None -> (t.cursor.line, t.cursor.line)
+			| Some m ->
+				(min m.line t.cursor.line, max m.line t.cursor.line)
+		in
+		let doc = ref t.doc in
+		let removals = Array.make (b - a + 1) 0 in
+		for i = a to b do
+			match Doc.get_line i !doc with
+			| None -> ()
+			| Some line ->
+				let remove =
+					if String.length line > 0 && line.[0] = '\t' then 1
+					else begin
+						let limit = min 8 (String.length line) in
+						let n = ref 0 in
+						while !n < limit && line.[!n] = ' ' do incr n done;
+						!n
+					end
+				in
+				if remove > 0 then begin
+					doc :=
+						Doc.delete_range !doc
+							~start_line:i ~start_col:0
+							~end_line:i ~end_col:remove;
+					removals.(i - a) <- remove
+				end
+		done;
+		let shift (pos : Position.t) =
+			if pos.line >= a && pos.line <= b then
+				let r = removals.(pos.line - a) in
+				{ pos with column = max 0 (pos.column - r) }
+			else pos
+		in
+		{ t with
+			doc = !doc;
+			cursor = shift t.cursor;
+			mark = Option.map shift t.mark;
+			dirty = true;
+			undo = snapshot_of t :: t.undo;
+			redo = [];
+			burst = None;
 		}
 	| Command.Delete { start_pos; end_pos } ->
 		let undo = snapshot_of t :: t.undo in
@@ -231,6 +380,11 @@ let apply cmd t =
 		| None -> { t with message = Some "yank buffer empty" }
 		| Some text ->
 			let undo = snapshot_of t :: t.undo in
+			let t =
+				match t.mark with
+				| None -> t
+				| Some _ -> consume_selection t
+			in
 			let at = t.cursor in
 			let doc =
 				Doc.insert_at ~line:at.line ~column:at.column text t.doc

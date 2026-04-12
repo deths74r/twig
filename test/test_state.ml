@@ -336,6 +336,106 @@ let () =
 		let s = State.apply Paste s in
 		assert (Doc.get_line 0 s.doc = Some "worldhello "));
 
+	test "Insert with mark replaces selection" (fun () ->
+		let s = state_of "hello world" in
+		let s = { s with mark = Some (pos 0 6); cursor = pos 0 11 } in
+		let s = State.apply
+			(Insert { at = pos 0 11; text = "you" }) s
+		in
+		assert (Doc.get_line 0 s.doc = Some "hello you");
+		assert (Position.equal s.cursor (pos 0 9));
+		assert (s.mark = None));
+
+	test "Insert_newline with mark replaces selection" (fun () ->
+		let s = state_of "hello world" in
+		let s = { s with mark = Some (pos 0 5); cursor = pos 0 11 } in
+		let s = State.apply Insert_newline s in
+		assert (Doc.line_count s.doc = 2);
+		assert (Doc.get_line 0 s.doc = Some "hello");
+		assert (Doc.get_line 1 s.doc = Some "");
+		assert (s.mark = None));
+
+	test "Paste with mark replaces selection" (fun () ->
+		let s = state_of "hello world" in
+		let s = { s with
+			mark = Some (pos 0 6);
+			cursor = pos 0 11;
+			yank = Some "friend";
+		} in
+		let s = State.apply Paste s in
+		assert (Doc.get_line 0 s.doc = Some "hello friend");
+		assert (s.mark = None));
+
+	test "Insert_newline auto-indents from current line" (fun () ->
+		let s = state_of "\thello" in
+		let s = State.apply (Move_cursor (pos 0 6)) s in
+		let s = State.apply Insert_newline s in
+		assert (Doc.line_count s.doc = 2);
+		assert (Doc.get_line 0 s.doc = Some "\thello");
+		assert (Doc.get_line 1 s.doc = Some "\t");
+		assert (Position.equal s.cursor (pos 1 1)));
+
+	test "Insert_newline preserves space indent" (fun () ->
+		let s = state_of "    four" in
+		let s = State.apply (Move_cursor (pos 0 8)) s in
+		let s = State.apply Insert_newline s in
+		assert (Doc.get_line 1 s.doc = Some "    ");
+		assert (Position.equal s.cursor (pos 1 4)));
+
+	test "Insert_newline skips auto-indent when cursor is inside leading ws" (fun () ->
+		let s = state_of "    hello" in
+		let s = State.apply (Move_cursor (pos 0 2)) s in
+		let s = State.apply Insert_newline s in
+		assert (Doc.get_line 0 s.doc = Some "  ");
+		assert (Doc.get_line 1 s.doc = Some "  hello"));
+
+	test "Insert_newline on empty line adds empty line" (fun () ->
+		let s = state_of "" in
+		let s = State.apply Insert_newline s in
+		assert (Doc.line_count s.doc = 2);
+		assert (Position.equal s.cursor (pos 1 0)));
+
+	test "Indent_block shifts every line in range" (fun () ->
+		let s = state_of "a\nb\nc" in
+		let s = { s with mark = Some (pos 0 0); cursor = pos 2 0 } in
+		let s = State.apply Indent_block s in
+		assert (Doc.get_line 0 s.doc = Some "\ta");
+		assert (Doc.get_line 1 s.doc = Some "\tb");
+		assert (Doc.get_line 2 s.doc = Some "\tc"));
+
+	test "Indent_block keeps cursor and mark aligned to content" (fun () ->
+		let s = state_of "abc\ndef" in
+		let s = { s with mark = Some (pos 0 1); cursor = pos 1 2 } in
+		let s = State.apply Indent_block s in
+		assert (Position.equal s.cursor (pos 1 3));
+		assert (s.mark = Some (pos 0 2)));
+
+	test "Outdent_block removes leading tab" (fun () ->
+		let s = state_of "\ta\n\tb" in
+		let s = { s with mark = Some (pos 0 0); cursor = pos 1 1 } in
+		let s = State.apply Outdent_block s in
+		assert (Doc.get_line 0 s.doc = Some "a");
+		assert (Doc.get_line 1 s.doc = Some "b"));
+
+	test "Outdent_block removes up to 8 spaces" (fun () ->
+		let s = state_of "        a" in
+		let s = { s with cursor = pos 0 8 } in
+		let s = State.apply Outdent_block s in
+		assert (Doc.get_line 0 s.doc = Some "a");
+		assert (s.cursor.column = 0));
+
+	test "Outdent_block without mark outdents cursor's line only" (fun () ->
+		let s = state_of "\ta\n\tb" in
+		let s = { s with cursor = pos 0 1 } in
+		let s = State.apply Outdent_block s in
+		assert (Doc.get_line 0 s.doc = Some "a");
+		assert (Doc.get_line 1 s.doc = Some "\tb"));
+
+	test "Outdent_block is a no-op on a line with no leading ws" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply Outdent_block s in
+		assert (Doc.get_line 0 s.doc = Some "hello"));
+
 	test "Open_file_start enters Opening_file mode" (fun () ->
 		let s = state_of "hello" in
 		let s = State.apply Open_file_start s in

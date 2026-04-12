@@ -13,6 +13,19 @@ let line_length (state : State.t) line =
 let line_text (state : State.t) line =
 	Option.value (Doc.get_line line state.doc) ~default:""
 
+let selection_range (state : State.t) =
+	match state.mark with
+	| None -> None
+	| Some m ->
+		let c = state.cursor in
+		let (a, b) =
+			if (m.line < c.line)
+				|| (m.line = c.line && m.column <= c.column)
+			then (m, c)
+			else (c, m)
+		in
+		Some (a, b)
+
 let command_in_search (event : Input.event) : Command.t option =
 	match event with
 	| Char u ->
@@ -40,36 +53,46 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 	| Char u ->
 		Some (Insert { at = cursor; text = uchar_to_string u })
 	| Enter ->
-		Some (Insert { at = cursor; text = "\n" })
+		Some Insert_newline
 	| Tab ->
-		Some (Insert { at = cursor; text = "\t" })
+		(match state.mark with
+		| Some m when m.line <> cursor.line -> Some Indent_block
+		| _ -> Some (Insert { at = cursor; text = "\t" }))
+	| Shift_tab ->
+		Some Outdent_block
 	| Backspace ->
-		if cursor.column > 0 then
-			let start_pos : Position.t =
-				{ cursor with column = cursor.column - 1 }
-			in
-			Some (Delete { start_pos; end_pos = cursor })
-		else if cursor.line > 0 then
-			let prev_line = cursor.line - 1 in
-			let prev_len = line_length state prev_line in
-			let start_pos : Position.t =
-				{ line = prev_line; column = prev_len }
-			in
-			Some (Delete { start_pos; end_pos = cursor })
-		else None
+		(match selection_range state with
+		| Some (a, b) -> Some (Delete { start_pos = a; end_pos = b })
+		| None ->
+			if cursor.column > 0 then
+				let start_pos : Position.t =
+					{ cursor with column = cursor.column - 1 }
+				in
+				Some (Delete { start_pos; end_pos = cursor })
+			else if cursor.line > 0 then
+				let prev_line = cursor.line - 1 in
+				let prev_len = line_length state prev_line in
+				let start_pos : Position.t =
+					{ line = prev_line; column = prev_len }
+				in
+				Some (Delete { start_pos; end_pos = cursor })
+			else None)
 	| Delete ->
-		let len = line_length state cursor.line in
-		if cursor.column < len then
-			let end_pos : Position.t =
-				{ cursor with column = cursor.column + 1 }
-			in
-			Some (Delete { start_pos = cursor; end_pos })
-		else if cursor.line + 1 < Doc.line_count state.doc then
-			let end_pos : Position.t =
-				{ line = cursor.line + 1; column = 0 }
-			in
-			Some (Delete { start_pos = cursor; end_pos })
-		else None
+		(match selection_range state with
+		| Some (a, b) -> Some (Delete { start_pos = a; end_pos = b })
+		| None ->
+			let len = line_length state cursor.line in
+			if cursor.column < len then
+				let end_pos : Position.t =
+					{ cursor with column = cursor.column + 1 }
+				in
+				Some (Delete { start_pos = cursor; end_pos })
+			else if cursor.line + 1 < Doc.line_count state.doc then
+				let end_pos : Position.t =
+					{ line = cursor.line + 1; column = 0 }
+				in
+				Some (Delete { start_pos = cursor; end_pos })
+			else None)
 	| Arrow Up ->
 		Some (Move_cursor { cursor with line = cursor.line - 1 })
 	| Arrow Down ->
