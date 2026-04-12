@@ -536,6 +536,91 @@ let () =
 		let s = State.apply Command_execute s in
 		assert (s.cursor.line = 2));
 
+	test "Command save as changes filename" (fun () ->
+		let path = Filename.temp_file "twig_saveas_" ".txt" in
+		let s = state_of "saved content" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input ("save as " ^ path)) s in
+		let s = State.apply Command_execute s in
+		assert (s.filename = Some path);
+		assert (not s.dirty);
+		let ic = open_in path in
+		let content = really_input_string ic (in_channel_length ic) in
+		close_in ic;
+		Sys.remove path;
+		assert (content = "saved content"));
+
+	test "Command replace substitutes globally" (fun () ->
+		let s = state_of "foo bar foo baz foo" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "replace foo with X") s in
+		let s = State.apply Command_execute s in
+		assert (Doc.get_line 0 s.doc = Some "X bar X baz X");
+		assert (s.dirty));
+
+	test "Command replace across lines" (fun () ->
+		let s = state_of "hello world\nhello again" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "replace hello with hi") s in
+		let s = State.apply Command_execute s in
+		assert (Doc.get_line 0 s.doc = Some "hi world");
+		assert (Doc.get_line 1 s.doc = Some "hi again"));
+
+	test "Command replace no matches" (fun () ->
+		let s = state_of "abc" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "replace zzz with q") s in
+		let s = State.apply Command_execute s in
+		assert (Doc.get_line 0 s.doc = Some "abc");
+		assert (s.message <> None));
+
+	test "Command dup duplicates current line" (fun () ->
+		let s = state_of "hello\nworld" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "dup") s in
+		let s = State.apply Command_execute s in
+		assert (Doc.line_count s.doc = 3);
+		assert (Doc.get_line 0 s.doc = Some "hello");
+		assert (Doc.get_line 1 s.doc = Some "hello");
+		assert (Doc.get_line 2 s.doc = Some "world"));
+
+	test "Command dup N duplicates N times" (fun () ->
+		let s = state_of "line" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "dup 3") s in
+		let s = State.apply Command_execute s in
+		assert (Doc.line_count s.doc = 4));
+
+	test "Command theme cycles" (fun () ->
+		let s = state_of "" in
+		assert (s.theme_name = "default");
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "theme") s in
+		let s = State.apply Command_execute s in
+		assert (s.theme_name <> "default"));
+
+	test "Command theme by name" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "theme solar") s in
+		let s = State.apply Command_execute s in
+		assert (s.theme_name = "solar"));
+
+	test "Command theme invalid name shows error" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "theme bogus") s in
+		let s = State.apply Command_execute s in
+		assert (s.theme_name = "default");
+		assert (s.message <> None));
+
+	test "Command help shows message" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "help") s in
+		let s = State.apply Command_execute s in
+		assert (s.message <> None));
+
 	test "Unknown command shows error message" (fun () ->
 		let s = state_of "" in
 		let s = State.apply (Enter_command_prompt "") s in

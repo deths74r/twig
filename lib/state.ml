@@ -36,6 +36,7 @@ type t = {
 	last_search : string option;
 	mark : Position.t option;
 	yank : string option;
+	theme_name : string;
 	undo : snapshot list;
 	redo : snapshot list;
 }
@@ -52,6 +53,7 @@ let empty = {
 	last_search = None;
 	mark = None;
 	yank = None;
+	theme_name = "default";
 	undo = [];
 	redo = [];
 }
@@ -586,6 +588,14 @@ let apply cmd t =
 						{ t with should_quit = true }
 				| ("q!" | "quit!") :: _ ->
 					{ t with should_quit = true }
+				| ("w" | "save") :: "as" :: path_parts ->
+					let path = String.concat " " path_parts in
+					if path = "" then
+						{ t with message = Some "save as: no path" }
+					else begin
+						let t = { t with filename = Some path } in
+						save t
+					end
 				| ("w" | "save") :: _ ->
 					save t
 				| ("wq") :: _ ->
@@ -619,6 +629,140 @@ let apply cmd t =
 							burst = None;
 							mark = None;
 						}
+				| "replace" :: rest ->
+					let split_at_with words =
+						let rec loop left = function
+							| [] -> None
+							| "with" :: r ->
+								Some (
+									String.concat " " (List.rev left),
+									String.concat " " r
+								)
+							| w :: r -> loop (w :: left) r
+						in
+						loop [] words
+					in
+					(match split_at_with rest with
+					| None | Some ("", _) | Some (_, "") ->
+						{ t with
+							message = Some "usage: replace <old> with <new>";
+						}
+					| Some (old_text, new_text) ->
+						let undo = snapshot_of t :: t.undo in
+						let total = ref 0 in
+						let doc = ref t.doc in
+						for i = 0 to Doc.line_count t.doc - 1 do
+							match Doc.get_line i !doc with
+							| None -> ()
+							| Some line ->
+								let ol = String.length old_text in
+								let buf = Buffer.create (String.length line) in
+								let j = ref 0 in
+								let cnt = ref 0 in
+								let ll = String.length line in
+								while !j <= ll - ol do
+									if String.sub line !j ol = old_text then begin
+										Buffer.add_string buf new_text;
+										j := !j + ol;
+										incr cnt
+									end else begin
+										Buffer.add_char buf line.[!j];
+										incr j
+									end
+								done;
+								while !j < ll do
+									Buffer.add_char buf line.[!j];
+									incr j
+								done;
+								if !cnt > 0 then begin
+									doc := Doc.replace_line i
+										(Buffer.contents buf) !doc;
+									total := !total + !cnt
+								end
+						done;
+						if !total = 0 then
+							{ t with message = Some "no matches found" }
+						else
+							{ t with
+								doc = !doc;
+								dirty = true;
+								undo;
+								redo = [];
+								burst = None;
+								message = Some
+									(Printf.sprintf "replaced %d occurrence%s"
+										!total
+										(if !total = 1 then "" else "s"));
+							})
+				| "dup" :: rest ->
+					let n =
+						match rest with
+						| n_s :: _ ->
+							(match int_of_string_opt n_s with
+							| Some n -> max 1 n
+							| None -> 1)
+						| [] -> 1
+					in
+					let line = t.cursor.line in
+					let line_text =
+						Option.value
+							(Doc.get_line line t.doc) ~default:""
+					in
+					let undo = snapshot_of t :: t.undo in
+					let doc = ref t.doc in
+					for i = 1 to n do
+						doc := Doc.insert_line (line + i) line_text !doc
+					done;
+					{ t with
+						doc = !doc;
+						cursor = clamp_cursor !doc
+							{ t.cursor with line = line + n };
+						dirty = true;
+						undo;
+						redo = [];
+						burst = None;
+						message = Some
+							(Printf.sprintf "duplicated %d line%s"
+								n (if n = 1 then "" else "s"));
+					}
+				| ["theme"] ->
+					let current = t.theme_name in
+					let names = Theme.names in
+					let rec next = function
+						| [] -> List.hd names
+						| [_] -> List.hd names
+						| a :: b :: _ when a = current -> b
+						| _ :: rest -> next rest
+					in
+					let name = next names in
+					{ t with
+						theme_name = name;
+						message = Some
+							(Printf.sprintf "theme: %s" name);
+					}
+				| "theme" :: name :: _ ->
+					let name = String.lowercase_ascii name in
+					(match Theme.by_name name with
+					| Some _ ->
+						{ t with
+							theme_name = name;
+							message = Some
+								(Printf.sprintf "theme: %s" name);
+						}
+					| None ->
+						{ t with
+							message = Some
+								(Printf.sprintf
+									"unknown theme (available: %s)"
+									(String.concat ", " Theme.names));
+						})
+				| ["help"] ->
+					{ t with
+						message = Some
+							"Ctrl-F:find Ctrl-S:save Ctrl-Z:undo \
+							 Ctrl-Y:redo Ctrl-O:open \
+							 ESC/Shift+Space:commands";
+					}
 				| ["wrap"] ->
 					{ t with message = Some "use Alt-Z to toggle wrap" }
 				| ["numbers"] ->

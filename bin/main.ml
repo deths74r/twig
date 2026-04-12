@@ -261,22 +261,33 @@ let main_loop (initial_state : State.t) (initial_ui : Ui.t) =
 		ui := new_ui;
 		Terminal.write frame;
 		let event = Input.read () in
-		match command_of_event !ui !state event with
+		let was_chord =
+			match (!state).mode with
+			| Command_chord -> true
+			| _ -> false
+		in
+		(match command_of_event !ui !state event with
 		| Some cmd ->
 			state := State.apply cmd !state;
+			if was_chord then begin
+				match (!state).mode with
+				| Command_chord ->
+					state := { !state with mode = Edit }
+				| _ -> ()
+			end;
 			(match cmd with
 			| Copy | Cut ->
 				(match (!state).yank with
 				| Some s -> Terminal.write (Clipboard.osc52_set s)
 				| None -> ())
 			| Toggle_wrap ->
-				ui := { !ui with wrap = not (!ui).wrap }
+				ui := { !ui with wrap = not (!ui).wrap };
 			| Toggle_line_numbers ->
 				ui := { !ui with
 					show_line_numbers = not (!ui).show_line_numbers
 				}
 			| _ -> ())
-		| None -> ()
+		| None -> ())
 	done
 
 let () =

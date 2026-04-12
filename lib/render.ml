@@ -288,8 +288,18 @@ let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 		if !doc_row >= total_lines then begin
 			move_cursor buf !screen_row 0;
 			clear_line buf;
-			Buffer.add_string buf (String.make gutter ' ');
-			Buffer.add_char buf '~';
+			if gutter > 1 then begin
+				Buffer.add_string buf "\x1b[90m";
+				Buffer.add_string buf (String.make (gutter - 2) ' ');
+				Buffer.add_char buf '~';
+				Buffer.add_string buf "\x1b[0m";
+				Buffer.add_char buf ' '
+			end else if gutter = 1 then begin
+				Buffer.add_string buf "\x1b[90m";
+				Buffer.add_char buf '~';
+				Buffer.add_string buf "\x1b[0m"
+			end else
+				Buffer.add_char buf '~';
 			incr screen_row;
 			incr doc_row
 		end else begin
@@ -499,7 +509,16 @@ let vertical_move (state : State.t) (ui : Ui.t) direction =
 		end
 		else None
 
+let resolve_theme (state : State.t) =
+	match Theme.by_name state.theme_name with
+	| Some t -> t
+	| None -> Theme.default
+
 let frame ?(theme = Theme.default) (state : State.t) (ui : Ui.t) =
+	let theme =
+		if state.theme_name = "default" then theme
+		else resolve_theme state
+	in
 	let gutter = gutter_width state ui in
 	let content_max = max 1 (ui.cols - gutter) in
 	let wrap_limit = if ui.wrap then content_max else max_int / 2 in

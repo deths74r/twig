@@ -36,6 +36,7 @@ type t = {
 	last_search : string option;
 	mark : Position.t option;
 	yank : string option;
+	theme_name : string;
 	undo : snapshot list;
 	redo : snapshot list;
 }

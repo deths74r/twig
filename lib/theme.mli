@@ -16,4 +16,10 @@ type t = {
 
 val default : t
 
+val all : (string * t) list
+
+val by_name : string -> t option
+
+val names : string list
+
 val color_for : t -> Syntax.token -> string
