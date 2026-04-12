@@ -230,6 +230,11 @@ let find_all_in_line line query =
 		end
 	end
 
+let preview_line_of (state : State.t) =
+	match state.mode with
+	| Command_prompt cp -> cp.preview_line
+	| _ -> None
+
 let line_match_ranges (state : State.t) line_text =
 	match state.mode with
 	| Searching search when search.query <> "" ->
@@ -315,8 +320,15 @@ let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 						end else
 							Buffer.add_string buf (String.make gutter ' ')
 					end;
+					let is_preview =
+						preview_line_of state = Some !doc_row
+					in
+					if is_preview then
+						Buffer.add_string buf "\x1b[48;5;236m";
 					emit_segment buf line spans theme seg content_max
 						sel matches;
+					if is_preview then
+						Buffer.add_string buf "\x1b[49m";
 					(if !doc_row = state.cursor.line then begin
 						let c = state.cursor.column in
 						let is_last = seg_idx = n_segs - 1 in
@@ -374,6 +386,17 @@ let draw_message_bar buf (state : State.t) (ui : Ui.t) =
 		Buffer.add_string buf (Grapheme.truncate_to_width prompt ui.cols)
 	| Opening_file of_state ->
 		let prompt = Printf.sprintf "Open: %s" of_state.path in
+		Buffer.add_string buf (Grapheme.truncate_to_width prompt ui.cols)
+	| Command_chord ->
+		let legend =
+			"s:save S:saveas q:quit f:find r:replace g:goto \
+			 t:theme w:wrap n:nums h:help :cmd"
+		in
+		Buffer.add_string buf "\x1b[90m";
+		Buffer.add_string buf (Grapheme.truncate_to_width legend ui.cols);
+		Buffer.add_string buf "\x1b[0m"
+	| Command_prompt cp ->
+		let prompt = Printf.sprintf ":%s" cp.input in
 		Buffer.add_string buf (Grapheme.truncate_to_width prompt ui.cols)
 	| Edit ->
 		match state.message with
@@ -492,6 +515,13 @@ let frame ?(theme = Theme.default) (state : State.t) (ui : Ui.t) =
 		let row = ui.rows - 1 in
 		let col = 6 + Grapheme.display_width of_state.path in
 		move_cursor buf row col
+	| Command_prompt cp ->
+		let row = ui.rows - 1 in
+		let col = 1 + Grapheme.display_width cp.input in
+		move_cursor buf row col
+	| Command_chord ->
+		let row = ui.rows - 1 in
+		move_cursor buf row 0
 	| _ ->
 		(match cursor_screen with
 		| Some (r, c) -> move_cursor buf r c

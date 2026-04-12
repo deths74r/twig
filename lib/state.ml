@@ -12,10 +12,17 @@ type open_file = {
 	path : string;
 }
 
+type command_prompt = {
+	input : string;
+	preview_line : int option;
+}
+
 type mode =
 	| Edit
 	| Searching of search
 	| Opening_file of open_file
+	| Command_chord
+	| Command_prompt of command_prompt
 
 type t = {
 	doc : Doc.t;
@@ -144,6 +151,18 @@ let consume_selection t =
 			in
 			{ t with doc; cursor = a; mark = None }
 		end
+
+let parse_goto_preview input t =
+	let trimmed = String.trim input in
+	let parts = String.split_on_char ' ' trimmed in
+	match parts with
+	| ("goto" | "g") :: n :: _ ->
+		(match int_of_string_opt n with
+		| Some line ->
+			let line = max 0 (line - 1) in
+			if line < Doc.line_count t.doc then Some line else None
+		| None -> None)
+	| _ -> None
 
 let leading_ws_len s =
 	let n = String.length s in
@@ -434,7 +453,7 @@ let apply cmd t =
 		}
 	| Command.Search_append s ->
 		(match t.mode with
-		| Edit | Opening_file _ -> t
+		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
 		| Searching search ->
 			let query = search.query ^ s in
 			let cursor =
@@ -448,7 +467,7 @@ let apply cmd t =
 			})
 	| Command.Search_backspace ->
 		(match t.mode with
-		| Edit | Opening_file _ -> t
+		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
 		| Searching search ->
 			let qlen = String.length search.query in
 			if qlen = 0 then t
@@ -470,7 +489,7 @@ let apply cmd t =
 			end)
 	| Command.Search_commit ->
 		(match t.mode with
-		| Edit | Opening_file _ -> t
+		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
 		| Searching search ->
 			{ t with
 				mode = Edit;
@@ -480,7 +499,7 @@ let apply cmd t =
 			})
 	| Command.Search_cancel ->
 		(match t.mode with
-		| Edit | Opening_file _ -> t
+		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
 		| Searching search ->
 			{ t with mode = Edit; cursor = search.origin })
 	| Command.Search_next ->
@@ -522,6 +541,95 @@ let apply cmd t =
 		| _ -> t)
 	| Command.Toggle_wrap -> t
 	| Command.Toggle_line_numbers -> t
+	| Command.Enter_command_chord ->
+		{ t with mode = Command_chord; burst = None }
+	| Command.Enter_command_prompt prefix ->
+		{ t with
+			mode = Command_prompt { input = prefix; preview_line = None };
+			burst = None;
+		}
+	| Command.Command_input s ->
+		(match t.mode with
+		| Command_prompt cp ->
+			let input = cp.input ^ s in
+			let preview_line = parse_goto_preview input t in
+			{ t with mode = Command_prompt { input; preview_line } }
+		| _ -> t)
+	| Command.Command_backspace ->
+		(match t.mode with
+		| Command_prompt cp ->
+			let len = String.length cp.input in
+			if len = 0 then { t with mode = Edit }
+			else begin
+				let input = String.sub cp.input 0 (len - 1) in
+				let preview_line = parse_goto_preview input t in
+				{ t with mode = Command_prompt { input; preview_line } }
+			end
+		| _ -> t)
+	| Command.Command_cancel ->
+		(match t.mode with
+		| Command_prompt _ | Command_chord -> { t with mode = Edit }
+		| _ -> t)
+	| Command.Command_execute ->
+		(match t.mode with
+		| Command_prompt cp ->
+			let input = String.trim cp.input in
+			let t = { t with mode = Edit } in
+			if input = "" then t
+			else begin
+				let parts = String.split_on_char ' ' input in
+				match parts with
+				| ("q" | "quit") :: _ ->
+					if t.dirty then
+						{ t with message = Some "unsaved changes (use q! to force)" }
+					else
+						{ t with should_quit = true }
+				| ("q!" | "quit!") :: _ ->
+					{ t with should_quit = true }
+				| ("w" | "save") :: _ ->
+					save t
+				| ("wq") :: _ ->
+					let t = save t in
+					{ t with should_quit = true }
+				| "goto" :: n :: _ | "g" :: n :: _ ->
+					(match int_of_string_opt n with
+					| Some line ->
+						let line = max 0 (line - 1) in
+						{ t with
+							cursor = clamp_cursor t.doc
+								{ Position.line; column = 0 };
+							burst = None;
+							mark = None;
+						}
+					| None ->
+						{ t with message = Some "goto: invalid line number" })
+				| ["top"] ->
+					{ t with
+						cursor = Position.origin;
+						burst = None;
+						mark = None;
+					}
+				| ["bottom"] | ["bot"] ->
+					let n = Doc.line_count t.doc in
+					if n = 0 then t
+					else
+						{ t with
+							cursor = clamp_cursor t.doc
+								{ Position.line = n - 1; column = 0 };
+							burst = None;
+							mark = None;
+						}
+				| ["wrap"] ->
+					{ t with message = Some "use Alt-Z to toggle wrap" }
+				| ["numbers"] ->
+					{ t with message = Some "use Alt-L to toggle line numbers" }
+				| _ ->
+					{ t with
+						message = Some
+							(Printf.sprintf "unknown command: %s" input);
+					}
+			end
+		| _ -> t)
 	| Command.Open_file_commit ->
 		(match t.mode with
 		| Opening_file of_state ->

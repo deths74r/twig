@@ -12,10 +12,17 @@ type open_file = {
 	path : string;
 }
 
+type command_prompt = {
+	input : string;
+	preview_line : int option;
+}
+
 type mode =
 	| Edit
 	| Searching of search
 	| Opening_file of open_file
+	| Command_chord
+	| Command_prompt of command_prompt
 
 type t = {
 	doc : Doc.t;

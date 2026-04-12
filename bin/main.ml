@@ -46,6 +46,45 @@ let command_in_open_file (event : Input.event) : Command.t option =
 	| Ctrl 'c' -> Some Open_file_cancel
 	| _ -> None
 
+let command_in_chord (_state : State.t) (event : Input.event)
+		: Command.t option =
+	match event with
+	| Char u ->
+		let c = uchar_to_string u in
+		(match c with
+		| "s" -> Some Save
+		| "S" -> Some (Enter_command_prompt "save as ")
+		| "q" -> Some Quit
+		| "Q" ->
+			Some (Enter_command_prompt "q!")
+		| "f" -> Some Search_start
+		| "r" -> Some (Enter_command_prompt "replace ")
+		| "g" -> Some (Enter_command_prompt "goto ")
+		| "t" -> Some (Enter_command_prompt "theme ")
+		| "w" -> Some Toggle_wrap
+		| "n" -> Some Toggle_line_numbers
+		| "u" -> Some Undo
+		| "U" -> Some Redo
+		| "h" -> Some (Enter_command_prompt "help")
+		| "d" ->
+			Some (Enter_command_prompt "dup")
+		| ":" -> Some (Enter_command_prompt "")
+		| _ -> None)
+	| Escape -> Some Command_cancel
+	| Ctrl 'c' -> Some Command_cancel
+	| Shift_space -> Some Command_cancel
+	| _ -> None
+
+let command_in_prompt (event : Input.event) : Command.t option =
+	match event with
+	| Char u ->
+		Some (Command_input (uchar_to_string u))
+	| Backspace -> Some Command_backspace
+	| Enter -> Some Command_execute
+	| Escape -> Some Command_cancel
+	| Ctrl 'c' -> Some Command_cancel
+	| _ -> None
+
 let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 		: Command.t option =
 	let cursor = state.cursor in
@@ -188,14 +227,19 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 	| Ctrl 'v' -> Some Paste
 	| Alt 'z' -> Some Toggle_wrap
 	| Alt 'l' -> Some Toggle_line_numbers
+	| Shift_space -> Some Enter_command_chord
 	| Eof -> Some Quit
-	| Escape -> Some Clear_mark
+	| Escape ->
+		if state.mark <> None then Some Clear_mark
+		else Some Enter_command_chord
 	| Resize | Alt _ | Ctrl _ | Unknown -> None
 
 let command_of_event ui (state : State.t) event =
 	match state.mode with
 	| Searching _ -> command_in_search event
 	| Opening_file _ -> command_in_open_file event
+	| Command_chord -> command_in_chord state event
+	| Command_prompt _ -> command_in_prompt event
 	| Edit -> command_in_edit ui state event
 
 let initial_state () =
@@ -241,7 +285,9 @@ let () =
 	let ui = Ui.make ~rows ~cols in
 	Terminal.install_resize_handler ();
 	let saved = Terminal.enter_raw_mode () in
+	Terminal.enable_kitty_keyboard ();
 	let cleanup () =
+		Terminal.disable_kitty_keyboard ();
 		Terminal.write "\x1b[2J\x1b[H\x1b[?25h";
 		Terminal.restore saved
 	in

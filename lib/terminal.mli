@@ -4,6 +4,10 @@ val enter_raw_mode : unit -> saved_state
 
 val restore : saved_state -> unit
 
+val enable_kitty_keyboard : unit -> unit
+
+val disable_kitty_keyboard : unit -> unit
+
 val get_size : unit -> int * int
 
 val write : string -> unit

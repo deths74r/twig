@@ -18,6 +18,7 @@ type event =
 	| Word_right
 	| Doc_home
 	| Doc_end
+	| Shift_space
 	| Alt of char
 	| Ctrl of char
 	| Eof
@@ -66,7 +67,78 @@ let read_escape_sequence () =
 						else loop ()
 				in
 				loop ();
-				(match Buffer.contents buf with
+				let seq = Buffer.contents buf in
+				let parse_csi_u s =
+					let len = String.length s in
+					if len < 2 || s.[len - 1] <> 'u' then None
+					else begin
+						let content = String.sub s 0 (len - 1) in
+						let fields = String.split_on_char ';' content in
+						match fields with
+						| [] -> None
+						| cp_s :: rest ->
+							(match int_of_string_opt cp_s with
+							| None -> None
+							| Some cp ->
+								let mod_val, text_cp =
+									match rest with
+									| [] -> (1, None)
+									| [m] ->
+										let mv =
+											match int_of_string_opt m with
+											| Some v -> v
+											| None -> 1
+										in
+										(mv, None)
+									| m :: t :: _ ->
+										let mv =
+											match int_of_string_opt m with
+											| Some v -> v
+											| None -> 1
+										in
+										let tv =
+											match String.split_on_char ':' t with
+											| [] -> None
+											| first :: _ -> int_of_string_opt first
+										in
+										(mv, tv)
+								in
+								let mods = mod_val - 1 in
+								let shift = mods land 1 <> 0 in
+								let alt = mods land 2 <> 0 in
+								let ctrl = mods land 4 <> 0 in
+								Some (cp, shift, alt, ctrl, text_cp))
+					end
+				in
+				let decode_csi_u cp shift alt ctrl text_cp =
+					if cp = 27 then Escape
+					else if cp = 13 then Enter
+					else if cp = 9 && shift then Shift_tab
+					else if cp = 9 then Tab
+					else if cp = 127 then Backspace
+					else if cp = 32 && shift then Shift_space
+					else if ctrl && cp >= 97 && cp <= 122 then
+						Ctrl (Char.chr cp)
+					else if alt && cp >= 32 && cp < 127 then
+						Alt (Char.chr cp)
+					else if (not ctrl) && (not alt) then begin
+						match text_cp with
+						| Some t when t >= 32 ->
+							Char (Uchar.of_int t)
+						| _ ->
+							if cp >= 32 && cp < 127 then begin
+								let effective =
+									if shift && cp >= 97 && cp <= 122 then
+										cp - 32
+									else cp
+								in
+								Char (Uchar.of_int effective)
+							end
+							else Unknown
+					end
+					else Unknown
+				in
+				(match seq with
 				| "1~" | "7~" -> Home
 				| "4~" | "8~" -> End
 				| "3~" -> Delete
@@ -80,7 +152,11 @@ let read_escape_sequence () =
 				| "1;2B" -> Shift_arrow Down
 				| "1;2C" -> Shift_arrow Right
 				| "1;2D" -> Shift_arrow Left
-				| _ -> Unknown)
+				| _ ->
+					(match parse_csi_u seq with
+					| Some (cp, shift, alt, ctrl, text_cp) ->
+						decode_csi_u cp shift alt ctrl text_cp
+					| None -> Unknown))
 			| _ -> Unknown)
 		| Some 0x4F ->
 			(match read_byte () with

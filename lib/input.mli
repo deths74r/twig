@@ -18,6 +18,7 @@ type event =
 	| Word_right
 	| Doc_home
 	| Doc_end
+	| Shift_space
 	| Alt of char
 	| Ctrl of char
 	| Eof

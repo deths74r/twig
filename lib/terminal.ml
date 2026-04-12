@@ -35,6 +35,16 @@ let get_size () =
 		else Scanf.sscanf line "%d %d" (fun r c -> (r, c))
 	with _ -> (24, 80)
 
+let enable_kitty_keyboard () =
+	let s = "\x1b[>25u" in
+	let _ = Unix.write_substring Unix.stdout s 0 (String.length s) in
+	()
+
+let disable_kitty_keyboard () =
+	let s = "\x1b[<u" in
+	let _ = Unix.write_substring Unix.stdout s 0 (String.length s) in
+	()
+
 let write s =
 	let len = String.length s in
 	let written = ref 0 in

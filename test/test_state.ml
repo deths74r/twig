@@ -178,7 +178,7 @@ let () =
 		| Searching search ->
 			assert (search.query = "");
 			assert (Position.equal search.origin (pos 0 2))
-		| Edit | Opening_file _ -> assert false));
+		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> assert false));
 
 	test "search appends move cursor to match" (fun () ->
 		let s = state_of "hello world" in
@@ -212,7 +212,7 @@ let () =
 		assert (Position.equal s.cursor (pos 0 3));
 		(match s.mode with
 		| Edit -> ()
-		| Searching _ | Opening_file _ -> assert false));
+		| Searching _ | Opening_file _ | Command_chord | Command_prompt _ -> assert false));
 
 	test "search commit saves last_search" (fun () ->
 		let s = state_of "hello world" in
@@ -223,7 +223,7 @@ let () =
 		assert (Position.equal s.cursor (pos 0 6));
 		(match s.mode with
 		| Edit -> ()
-		| Searching _ | Opening_file _ -> assert false));
+		| Searching _ | Opening_file _ | Command_chord | Command_prompt _ -> assert false));
 
 	test "Search_next advances past current match" (fun () ->
 		let s = state_of "foo foo foo" in
@@ -435,6 +435,113 @@ let () =
 		let s = state_of "hello" in
 		let s = State.apply Outdent_block s in
 		assert (Doc.get_line 0 s.doc = Some "hello"));
+
+	test "Enter_command_chord enters Command_chord" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply Enter_command_chord s in
+		(match s.mode with
+		| Command_chord -> ()
+		| _ -> assert false));
+
+	test "Enter_command_prompt opens prompt with prefix" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "goto ") s in
+		(match s.mode with
+		| Command_prompt cp -> assert (cp.input = "goto ")
+		| _ -> assert false));
+
+	test "Command_input appends to prompt buffer" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "go") s in
+		let s = State.apply (Command_input "to") s in
+		(match s.mode with
+		| Command_prompt cp -> assert (cp.input = "goto")
+		| _ -> assert false));
+
+	test "Command_backspace on empty prompt cancels" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply Command_backspace s in
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false));
+
+	test "Command_cancel returns to Edit from chord" (fun () ->
+		let s = state_of "" in
+		let s = State.apply Enter_command_chord s in
+		let s = State.apply Command_cancel s in
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false));
+
+	test "Command_cancel returns to Edit from prompt" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "quit") s in
+		let s = State.apply Command_cancel s in
+		(match s.mode with
+		| Edit -> ()
+		| _ -> assert false);
+		assert (not s.should_quit));
+
+	test "Command quit on clean buffer sets should_quit" (fun () ->
+		let s = state_of "hello" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "q") s in
+		let s = State.apply Command_execute s in
+		assert (s.should_quit));
+
+	test "Command quit on dirty buffer refuses" (fun () ->
+		let s = { (state_of "hello") with dirty = true } in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "quit") s in
+		let s = State.apply Command_execute s in
+		assert (not s.should_quit);
+		assert (s.message <> None));
+
+	test "Command q! forces quit even when dirty" (fun () ->
+		let s = { (state_of "hello") with dirty = true } in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "q!") s in
+		let s = State.apply Command_execute s in
+		assert (s.should_quit));
+
+	test "Command goto jumps to line" (fun () ->
+		let s = state_of "aaa\nbbb\nccc\nddd" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "goto 3") s in
+		let s = State.apply Command_execute s in
+		assert (s.cursor.line = 2));
+
+	test "Goto preview highlights target line" (fun () ->
+		let s = state_of "aaa\nbbb\nccc" in
+		let s = State.apply (Enter_command_prompt "goto ") s in
+		let s = State.apply (Command_input "2") s in
+		(match s.mode with
+		| Command_prompt cp -> assert (cp.preview_line = Some 1)
+		| _ -> assert false));
+
+	test "Command top jumps to start" (fun () ->
+		let s = state_of "aaa\nbbb\nccc" in
+		let s = State.apply (Move_cursor (pos 2 0)) s in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "top") s in
+		let s = State.apply Command_execute s in
+		assert (Position.equal s.cursor Position.origin));
+
+	test "Command bottom jumps to end" (fun () ->
+		let s = state_of "aaa\nbbb\nccc" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "bottom") s in
+		let s = State.apply Command_execute s in
+		assert (s.cursor.line = 2));
+
+	test "Unknown command shows error message" (fun () ->
+		let s = state_of "" in
+		let s = State.apply (Enter_command_prompt "") s in
+		let s = State.apply (Command_input "foobar") s in
+		let s = State.apply Command_execute s in
+		assert (s.message <> None));
 
 	test "Open_file_start enters Opening_file mode" (fun () ->
 		let s = state_of "hello" in
