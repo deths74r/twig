@@ -1,6 +1,6 @@
 # twig
 
-A terminal text editor written in OCaml. Grapheme-aware, with soft wrap, syntax highlighting, a two-tier command system, and an immutable AVL-tree document model.
+An experimental terminal text editor written in OCaml. Grapheme-aware, with soft wrap, syntax highlighting, a two-tier command system, and an immutable AVL-tree document model.
 
 ## Features
 
