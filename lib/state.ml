@@ -1,4 +1,4 @@
-type snapshot = {
+type snapshot = Buf.snapshot = {
 	snap_doc : Doc.t;
 	snap_cursor : Position.t;
 }
@@ -74,38 +74,58 @@ let of_file path =
 	with Sys_error _ ->
 		{ empty with filename = Some path; message = Some "new file" }
 
-let snapshot_of t =
-	{ snap_doc = t.doc; snap_cursor = t.cursor }
+(* ------------------------------------------------------------------ *)
+(* Buffer ↔ State conversion for delegation                          *)
+(* ------------------------------------------------------------------ *)
 
-let restore s t =
-	{ t with doc = s.snap_doc; cursor = s.snap_cursor }
+let buffer_of (t : t) : Buf.t = {
+	doc = t.doc;
+	cursor = t.cursor;
+	mark = t.mark;
+	yank = t.yank;
+	burst = t.burst;
+	undo = t.undo;
+	redo = t.redo;
+	message = None;
+}
 
-let clamp_cursor doc (pos : Position.t) : Position.t =
-	let lines = Doc.line_count doc in
-	if lines = 0 then Position.origin
-	else begin
-		let line = max 0 (min pos.line (lines - 1)) in
-		let line_text = Option.value (Doc.get_line line doc) ~default:"" in
-		let max_col = Grapheme.count line_text in
-		let column = max 0 (min pos.column max_col) in
-		{ line; column }
-	end
+let update_from_buffer (t : t) (buf : Buf.t) : t = {
+	t with
+	doc = buf.doc;
+	cursor = buf.cursor;
+	mark = buf.mark;
+	yank = buf.yank;
+	burst = buf.burst;
+	undo = buf.undo;
+	redo = buf.redo;
+	message = buf.message;
+	dirty = if buf.doc != t.doc then true else t.dirty;
+}
 
-let cursor_after_insert (at : Position.t) text : Position.t =
-	let newlines =
-		String.fold_left
-			(fun acc c -> if c = '\n' then acc + 1 else acc)
-			0 text
-	in
-	if newlines = 0 then
-		{ at with column = at.column + Grapheme.count text }
-	else
-		let last_segment =
-			match List.rev (String.split_on_char '\n' text) with
-			| [] -> ""
-			| s :: _ -> s
-		in
-		{ line = at.line + newlines; column = Grapheme.count last_segment }
+(** Convert a Command.t to a Buf.command if it's a buffer
+    operation. Returns None for editor-specific commands. *)
+let to_buffer_command (cmd : Command.t) : Buf.command option =
+	match cmd with
+	| Command.Insert { at; text } -> Some (Buf.Insert { at; text })
+	| Command.Insert_newline -> Some Buf.Insert_newline
+	| Command.Delete { start_pos; end_pos } ->
+		Some (Buf.Delete { start_pos; end_pos })
+	| Command.Indent_block -> Some Buf.Indent_block
+	| Command.Outdent_block -> Some Buf.Outdent_block
+	| Command.Move_cursor p -> Some (Buf.Move_cursor p)
+	| Command.Extend_cursor p -> Some (Buf.Extend_cursor p)
+	| Command.Set_mark -> Some Buf.Set_mark
+	| Command.Clear_mark -> Some Buf.Clear_mark
+	| Command.Copy -> Some Buf.Copy
+	| Command.Cut -> Some Buf.Cut
+	| Command.Paste -> Some Buf.Paste
+	| Command.Undo -> Some Buf.Undo
+	| Command.Redo -> Some Buf.Redo
+	| _ -> None
+
+(* ------------------------------------------------------------------ *)
+(* Editor-specific helpers                                            *)
+(* ------------------------------------------------------------------ *)
 
 let save t =
 	match t.filename with
@@ -134,27 +154,6 @@ let save t =
 				message = Some ("save failed: " ^ Printexc.to_string e);
 			}
 
-let consume_selection t =
-	match t.mark with
-	| None -> t
-	| Some m ->
-		let cursor = t.cursor in
-		let (a, b) =
-			if (m.line < cursor.line)
-				|| (m.line = cursor.line && m.column <= cursor.column)
-			then (m, cursor)
-			else (cursor, m)
-		in
-		if Position.equal a b then { t with mark = None }
-		else begin
-			let doc =
-				Doc.delete_range t.doc
-					~start_line:a.line ~start_col:a.column
-					~end_line:b.line ~end_col:b.column
-			in
-			{ t with doc; cursor = a; mark = None }
-		end
-
 let parse_goto_preview input t =
 	let trimmed = String.trim input in
 	let parts = String.split_on_char ' ' trimmed in
@@ -167,633 +166,378 @@ let parse_goto_preview input t =
 		| None -> None)
 	| _ -> None
 
-let leading_ws_len s =
-	let n = String.length s in
-	let rec loop i =
-		if i >= n then i
-		else match s.[i] with
-			| ' ' | '\t' -> loop (i + 1)
-			| _ -> i
-	in
-	loop 0
+(* ------------------------------------------------------------------ *)
+(* Apply: delegates buffer commands, handles editor commands          *)
+(* ------------------------------------------------------------------ *)
 
 let apply cmd t =
-	let t = { t with message = None } in
-	match cmd with
-	| Command.Insert { at; text } ->
-		let had_mark = t.mark <> None in
-		let continue_burst =
-			if had_mark then false
-			else
-				match t.burst with
-				| Some p -> Position.equal p at
-				| None -> false
-		in
-		let undo =
-			if continue_burst then t.undo
-			else snapshot_of t :: t.undo
-		in
-		let t, effective_at =
-			if had_mark then
-				let t = consume_selection t in
-				(t, t.cursor)
-			else
-				(t, at)
-		in
-		let doc =
-			Doc.insert_at
-				~line:effective_at.line
-				~column:effective_at.column
-				text t.doc
-		in
-		let cursor =
-			clamp_cursor doc (cursor_after_insert effective_at text)
-		in
-		{ t with
-			doc;
-			cursor;
-			dirty = true;
-			undo;
-			redo = [];
-			burst = Some cursor;
-			mark = None;
-		}
-	| Command.Insert_newline ->
-		let undo = snapshot_of t :: t.undo in
-		let t =
-			match t.mark with
-			| None -> t
-			| Some _ -> consume_selection t
-		in
-		let line_text =
-			Option.value (Doc.get_line t.cursor.line t.doc) ~default:""
-		in
-		let indent_end = leading_ws_len line_text in
-		let cursor_byte = Grapheme.byte_of_index line_text t.cursor.column in
-		let indent =
-			if cursor_byte >= indent_end then String.sub line_text 0 indent_end
-			else ""
-		in
-		let text = "\n" ^ indent in
-		let at = t.cursor in
-		let doc =
-			Doc.insert_at ~line:at.line ~column:at.column text t.doc
-		in
-		let cursor = clamp_cursor doc (cursor_after_insert at text) in
-		{ t with
-			doc;
-			cursor;
-			dirty = true;
-			undo;
-			redo = [];
-			burst = None;
-			mark = None;
-		}
-	| Command.Indent_block ->
-		let a, b =
-			match t.mark with
-			| None -> (t.cursor.line, t.cursor.line)
-			| Some m ->
-				(min m.line t.cursor.line, max m.line t.cursor.line)
-		in
-		let doc = ref t.doc in
-		for i = a to b do
-			doc := Doc.insert_at ~line:i ~column:0 "\t" !doc
-		done;
-		let shift (pos : Position.t) =
-			if pos.line >= a && pos.line <= b then
-				{ pos with column = pos.column + 1 }
-			else pos
-		in
-		{ t with
-			doc = !doc;
-			cursor = shift t.cursor;
-			mark = Option.map shift t.mark;
-			dirty = true;
-			undo = snapshot_of t :: t.undo;
-			redo = [];
-			burst = None;
-		}
-	| Command.Outdent_block ->
-		let a, b =
-			match t.mark with
-			| None -> (t.cursor.line, t.cursor.line)
-			| Some m ->
-				(min m.line t.cursor.line, max m.line t.cursor.line)
-		in
-		let doc = ref t.doc in
-		let removals = Array.make (b - a + 1) 0 in
-		for i = a to b do
-			match Doc.get_line i !doc with
-			| None -> ()
-			| Some line ->
-				let remove =
-					if String.length line > 0 && line.[0] = '\t' then 1
-					else begin
-						let limit = min 8 (String.length line) in
-						let n = ref 0 in
-						while !n < limit && line.[!n] = ' ' do incr n done;
-						!n
-					end
-				in
-				if remove > 0 then begin
-					doc :=
-						Doc.delete_range !doc
-							~start_line:i ~start_col:0
-							~end_line:i ~end_col:remove;
-					removals.(i - a) <- remove
-				end
-		done;
-		let shift (pos : Position.t) =
-			if pos.line >= a && pos.line <= b then
-				let r = removals.(pos.line - a) in
-				{ pos with column = max 0 (pos.column - r) }
-			else pos
-		in
-		{ t with
-			doc = !doc;
-			cursor = shift t.cursor;
-			mark = Option.map shift t.mark;
-			dirty = true;
-			undo = snapshot_of t :: t.undo;
-			redo = [];
-			burst = None;
-		}
-	| Command.Delete { start_pos; end_pos } ->
-		let undo = snapshot_of t :: t.undo in
-		let doc =
-			Doc.delete_range
-				~start_line:start_pos.line
-				~start_col:start_pos.column
-				~end_line:end_pos.line
-				~end_col:end_pos.column
-				t.doc
-		in
-		{ t with
-			doc;
-			cursor = clamp_cursor doc start_pos;
-			dirty = true;
-			undo;
-			redo = [];
-			burst = None;
-			mark = None;
-		}
-	| Command.Move_cursor pos ->
-		{ t with
-			cursor = clamp_cursor t.doc pos;
-			burst = None;
-			mark = None;
-		}
-	| Command.Extend_cursor pos ->
-		let mark =
-			match t.mark with
-			| Some _ -> t.mark
-			| None -> Some t.cursor
-		in
-		{ t with
-			cursor = clamp_cursor t.doc pos;
-			burst = None;
-			mark;
-		}
-	| Command.Set_mark ->
-		{ t with mark = Some t.cursor; message = Some "mark set" }
-	| Command.Clear_mark ->
-		{ t with mark = None }
-	| Command.Copy ->
-		(match t.mark with
-		| None -> { t with message = Some "no selection" }
-		| Some m ->
-			let text = Doc.extract_range t.doc ~start:m ~stop:t.cursor in
+	(* Try buffer command first *)
+	match to_buffer_command cmd with
+	| Some buf_cmd ->
+		let buf = Buf.apply buf_cmd (buffer_of t) in
+		update_from_buffer t buf
+	| None ->
+		(* Editor-specific commands *)
+		let t = { t with message = None } in
+		match cmd with
+		| Command.Save -> { (save t) with burst = None }
+		| Command.Quit -> { t with should_quit = true }
+		| Command.Search_start ->
 			{ t with
-				yank = Some text;
-				mark = None;
-				message = Some "copied";
-			})
-	| Command.Cut ->
-		(match t.mark with
-		| None -> { t with message = Some "no selection" }
-		| Some m ->
-			let text = Doc.extract_range t.doc ~start:m ~stop:t.cursor in
-			let (a, b) =
-				if (m.line < t.cursor.line)
-					|| (m.line = t.cursor.line && m.column <= t.cursor.column)
-				then (m, t.cursor)
-				else (t.cursor, m)
-			in
-			let doc =
-				Doc.delete_range
-					~start_line:a.line ~start_col:a.column
-					~end_line:b.line ~end_col:b.column
-					t.doc
-			in
-			{ t with
-				doc;
-				cursor = clamp_cursor doc a;
-				yank = Some text;
-				mark = None;
-				dirty = true;
-				undo = snapshot_of t :: t.undo;
-				redo = [];
+				mode = Searching { query = ""; origin = t.cursor };
 				burst = None;
-				message = Some "cut";
-			})
-	| Command.Paste ->
-		(match t.yank with
-		| None -> { t with message = Some "yank buffer empty" }
-		| Some text ->
-			let undo = snapshot_of t :: t.undo in
-			let t =
-				match t.mark with
-				| None -> t
-				| Some _ -> consume_selection t
-			in
-			let at = t.cursor in
-			let doc =
-				Doc.insert_at ~line:at.line ~column:at.column text t.doc
-			in
-			let cursor = clamp_cursor doc (cursor_after_insert at text) in
-			{ t with
-				doc;
-				cursor;
-				dirty = true;
-				undo;
-				redo = [];
-				burst = None;
-				mark = None;
-			})
-	| Command.Save -> { (save t) with burst = None }
-	| Command.Quit -> { t with should_quit = true }
-	| Command.Undo ->
-		(match t.undo with
-		| [] -> t
-		| s :: rest ->
-			let redo = snapshot_of t :: t.redo in
-			let t = restore s t in
-			{ t with
-				undo = rest;
-				redo;
-				dirty = true;
-				burst = None;
-				mark = None;
-			})
-	| Command.Redo ->
-		(match t.redo with
-		| [] -> t
-		| s :: rest ->
-			let undo = snapshot_of t :: t.undo in
-			let t = restore s t in
-			{ t with
-				undo;
-				redo = rest;
-				dirty = true;
-				burst = None;
-				mark = None;
-			})
-	| Command.Search_start ->
-		{ t with
-			mode = Searching { query = ""; origin = t.cursor };
-			burst = None;
-		}
-	| Command.Search_append s ->
-		(match t.mode with
-		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
-		| Searching search ->
-			let query = search.query ^ s in
-			let cursor =
-				match Doc.find_forward t.doc ~from:search.origin ~query with
-				| Some p -> p
-				| None -> search.origin
-			in
-			{ t with
-				mode = Searching { search with query };
-				cursor;
-			})
-	| Command.Search_backspace ->
-		(match t.mode with
-		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
-		| Searching search ->
-			let qlen = String.length search.query in
-			if qlen = 0 then t
-			else begin
-				let query = String.sub search.query 0 (qlen - 1) in
+			}
+		| Command.Search_append s ->
+			(match t.mode with
+			| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
+			| Searching search ->
+				let query = search.query ^ s in
 				let cursor =
-					if query = "" then search.origin
-					else
-						match
-							Doc.find_forward t.doc ~from:search.origin ~query
-						with
-						| Some p -> p
-						| None -> search.origin
+					match Doc.find_forward t.doc ~from:search.origin ~query with
+					| Some p -> p
+					| None -> search.origin
 				in
 				{ t with
 					mode = Searching { search with query };
 					cursor;
-				}
-			end)
-	| Command.Search_commit ->
-		(match t.mode with
-		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
-		| Searching search ->
+				})
+		| Command.Search_backspace ->
+			(match t.mode with
+			| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
+			| Searching search ->
+				let qlen = String.length search.query in
+				if qlen = 0 then t
+				else begin
+					let query = String.sub search.query 0 (qlen - 1) in
+					let cursor =
+						if query = "" then search.origin
+						else
+							match
+								Doc.find_forward t.doc ~from:search.origin ~query
+							with
+							| Some p -> p
+							| None -> search.origin
+					in
+					{ t with
+						mode = Searching { search with query };
+						cursor;
+					}
+				end)
+		| Command.Search_commit ->
+			(match t.mode with
+			| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
+			| Searching search ->
+				{ t with
+					mode = Edit;
+					last_search =
+						if search.query = "" then t.last_search
+						else Some search.query;
+				})
+		| Command.Search_cancel ->
+			(match t.mode with
+			| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
+			| Searching search ->
+				{ t with mode = Edit; cursor = search.origin })
+		| Command.Search_next ->
+			(match t.last_search with
+			| None -> t
+			| Some query ->
+				let from = Doc.advance t.doc t.cursor in
+				(match Doc.find_forward t.doc ~from ~query with
+				| Some p -> { t with cursor = p; burst = None }
+				| None ->
+					{ t with message = Some "no more matches" }))
+		| Command.Open_file_start ->
+			let initial =
+				match t.filename with
+				| None -> ""
+				| Some f ->
+					let dir = Filename.dirname f in
+					if dir = "." || dir = "" then ""
+					else dir ^ "/"
+			in
+			{ t with mode = Opening_file { path = initial }; burst = None }
+		| Command.Open_file_append s ->
+			(match t.mode with
+			| Opening_file of_state ->
+				{ t with mode = Opening_file { path = of_state.path ^ s } }
+			| _ -> t)
+		| Command.Open_file_backspace ->
+			(match t.mode with
+			| Opening_file of_state ->
+				let plen = String.length of_state.path in
+				if plen = 0 then t
+				else
+					let path = String.sub of_state.path 0 (plen - 1) in
+					{ t with mode = Opening_file { path } }
+			| _ -> t)
+		| Command.Open_file_cancel ->
+			(match t.mode with
+			| Opening_file _ -> { t with mode = Edit }
+			| _ -> t)
+		| Command.Toggle_wrap -> t
+		| Command.Toggle_line_numbers -> t
+		| Command.Toggle_diff_markers -> t
+		| Command.Enter_command_chord ->
+			{ t with mode = Command_chord; burst = None }
+		| Command.Enter_command_prompt prefix ->
 			{ t with
-				mode = Edit;
-				last_search =
-					if search.query = "" then t.last_search
-					else Some search.query;
-			})
-	| Command.Search_cancel ->
-		(match t.mode with
-		| Edit | Opening_file _ | Command_chord | Command_prompt _ -> t
-		| Searching search ->
-			{ t with mode = Edit; cursor = search.origin })
-	| Command.Search_next ->
-		(match t.last_search with
-		| None -> t
-		| Some query ->
-			let from = Doc.advance t.doc t.cursor in
-			(match Doc.find_forward t.doc ~from ~query with
-			| Some p -> { t with cursor = p; burst = None }
-			| None ->
-				{ t with message = Some "no more matches" }))
-	| Command.Open_file_start ->
-		let initial =
-			match t.filename with
-			| None -> ""
-			| Some f ->
-				let dir = Filename.dirname f in
-				if dir = "." || dir = "" then ""
-				else dir ^ "/"
-		in
-		{ t with mode = Opening_file { path = initial }; burst = None }
-	| Command.Open_file_append s ->
-		(match t.mode with
-		| Opening_file of_state ->
-			{ t with mode = Opening_file { path = of_state.path ^ s } }
-		| _ -> t)
-	| Command.Open_file_backspace ->
-		(match t.mode with
-		| Opening_file of_state ->
-			let plen = String.length of_state.path in
-			if plen = 0 then t
-			else
-				let path = String.sub of_state.path 0 (plen - 1) in
-				{ t with mode = Opening_file { path } }
-		| _ -> t)
-	| Command.Open_file_cancel ->
-		(match t.mode with
-		| Opening_file _ -> { t with mode = Edit }
-		| _ -> t)
-	| Command.Toggle_wrap -> t
-	| Command.Toggle_line_numbers -> t
-	| Command.Toggle_diff_markers -> t
-	| Command.Enter_command_chord ->
-		{ t with mode = Command_chord; burst = None }
-	| Command.Enter_command_prompt prefix ->
-		{ t with
-			mode = Command_prompt { input = prefix; preview_line = None };
-			burst = None;
-		}
-	| Command.Command_input s ->
-		(match t.mode with
-		| Command_prompt cp ->
-			let input = cp.input ^ s in
-			let preview_line = parse_goto_preview input t in
-			{ t with mode = Command_prompt { input; preview_line } }
-		| _ -> t)
-	| Command.Command_backspace ->
-		(match t.mode with
-		| Command_prompt cp ->
-			let len = String.length cp.input in
-			if len = 0 then { t with mode = Edit }
-			else begin
-				let input = String.sub cp.input 0 (len - 1) in
+				mode = Command_prompt { input = prefix; preview_line = None };
+				burst = None;
+			}
+		| Command.Command_input s ->
+			(match t.mode with
+			| Command_prompt cp ->
+				let input = cp.input ^ s in
 				let preview_line = parse_goto_preview input t in
 				{ t with mode = Command_prompt { input; preview_line } }
-			end
-		| _ -> t)
-	| Command.Command_cancel ->
-		(match t.mode with
-		| Command_prompt _ | Command_chord -> { t with mode = Edit }
-		| _ -> t)
-	| Command.Command_execute ->
-		(match t.mode with
-		| Command_prompt cp ->
-			let input = String.trim cp.input in
-			let t = { t with mode = Edit } in
-			if input = "" then t
-			else begin
-				let parts = String.split_on_char ' ' input in
-				match parts with
-				| ("q" | "quit") :: _ ->
-					if t.dirty then
-						{ t with message = Some "unsaved changes (use q! to force)" }
-					else
+			| _ -> t)
+		| Command.Command_backspace ->
+			(match t.mode with
+			| Command_prompt cp ->
+				let len = String.length cp.input in
+				if len = 0 then { t with mode = Edit }
+				else begin
+					let input = String.sub cp.input 0 (len - 1) in
+					let preview_line = parse_goto_preview input t in
+					{ t with mode = Command_prompt { input; preview_line } }
+				end
+			| _ -> t)
+		| Command.Command_cancel ->
+			(match t.mode with
+			| Command_prompt _ | Command_chord -> { t with mode = Edit }
+			| _ -> t)
+		| Command.Command_execute ->
+			(match t.mode with
+			| Command_prompt cp ->
+				let input = String.trim cp.input in
+				let t = { t with mode = Edit } in
+				if input = "" then t
+				else begin
+					let parts = String.split_on_char ' ' input in
+					match parts with
+					| ("q" | "quit") :: _ ->
+						if t.dirty then
+							{ t with message = Some "unsaved changes (use q! to force)" }
+						else
+							{ t with should_quit = true }
+					| ("q!" | "quit!") :: _ ->
 						{ t with should_quit = true }
-				| ("q!" | "quit!") :: _ ->
-					{ t with should_quit = true }
-				| ("w" | "save") :: "as" :: path_parts ->
-					let path = String.concat " " path_parts in
-					if path = "" then
-						{ t with message = Some "save as: no path" }
-					else begin
-						let t = { t with filename = Some path } in
+					| ("w" | "save") :: "as" :: path_parts ->
+						let path = String.concat " " path_parts in
+						if path = "" then
+							{ t with message = Some "save as: no path" }
+						else begin
+							let t = { t with filename = Some path } in
+							save t
+						end
+					| ("w" | "save") :: _ ->
 						save t
-					end
-				| ("w" | "save") :: _ ->
-					save t
-				| ("wq") :: _ ->
-					let t = save t in
-					{ t with should_quit = true }
-				| "goto" :: n :: _ | "g" :: n :: _ ->
-					(match int_of_string_opt n with
-					| Some line ->
-						let line = max 0 (line - 1) in
+					| ("wq") :: _ ->
+						let t = save t in
+						{ t with should_quit = true }
+					| "goto" :: n :: _ | "g" :: n :: _ ->
+						(match int_of_string_opt n with
+						| Some line ->
+							let line = max 0 (line - 1) in
+							{ t with
+								cursor = Buf.clamp_cursor t.doc
+									{ Position.line; column = 0 };
+								burst = None;
+								mark = None;
+							}
+						| None ->
+							{ t with message = Some "goto: invalid line number" })
+					| ["top"] ->
 						{ t with
-							cursor = clamp_cursor t.doc
-								{ Position.line; column = 0 };
+							cursor = Position.origin;
 							burst = None;
 							mark = None;
 						}
-					| None ->
-						{ t with message = Some "goto: invalid line number" })
-				| ["top"] ->
-					{ t with
-						cursor = Position.origin;
-						burst = None;
-						mark = None;
-					}
-				| ["bottom"] | ["bot"] ->
-					let n = Doc.line_count t.doc in
-					if n = 0 then t
-					else
-						{ t with
-							cursor = clamp_cursor t.doc
-								{ Position.line = n - 1; column = 0 };
-							burst = None;
-							mark = None;
-						}
-				| "replace" :: rest ->
-					let split_at_with words =
-						let rec loop left = function
-							| [] -> None
-							| "with" :: r ->
-								Some (
-									String.concat " " (List.rev left),
-									String.concat " " r
-								)
-							| w :: r -> loop (w :: left) r
-						in
-						loop [] words
-					in
-					(match split_at_with rest with
-					| None | Some ("", _) | Some (_, "") ->
-						{ t with
-							message = Some "usage: replace <old> with <new>";
-						}
-					| Some (old_text, new_text) ->
-						let undo = snapshot_of t :: t.undo in
-						let total = ref 0 in
-						let doc = ref t.doc in
-						for i = 0 to Doc.line_count t.doc - 1 do
-							match Doc.get_line i !doc with
-							| None -> ()
-							| Some line ->
-								let ol = String.length old_text in
-								let buf = Buffer.create (String.length line) in
-								let j = ref 0 in
-								let cnt = ref 0 in
-								let ll = String.length line in
-								while !j <= ll - ol do
-									if String.sub line !j ol = old_text then begin
-										Buffer.add_string buf new_text;
-										j := !j + ol;
-										incr cnt
-									end else begin
-										Buffer.add_char buf line.[!j];
-										incr j
-									end
-								done;
-								while !j < ll do
-									Buffer.add_char buf line.[!j];
-									incr j
-								done;
-								if !cnt > 0 then begin
-									doc := Doc.replace_line i
-										(Buffer.contents buf) !doc;
-									total := !total + !cnt
-								end
-						done;
-						if !total = 0 then
-							{ t with message = Some "no matches found" }
+					| ["bottom"] | ["bot"] ->
+						let n = Doc.line_count t.doc in
+						if n = 0 then t
 						else
 							{ t with
-								doc = !doc;
-								dirty = true;
-								undo;
-								redo = [];
+								cursor = Buf.clamp_cursor t.doc
+									{ Position.line = n - 1; column = 0 };
 								burst = None;
-								message = Some
-									(Printf.sprintf "replaced %d occurrence%s"
-										!total
-										(if !total = 1 then "" else "s"));
-							})
-				| "dup" :: rest ->
-					let n =
-						match rest with
-						| n_s :: _ ->
-							(match int_of_string_opt n_s with
-							| Some n -> max 1 n
-							| None -> 1)
-						| [] -> 1
-					in
-					let line = t.cursor.line in
-					let line_text =
-						Option.value
-							(Doc.get_line line t.doc) ~default:""
-					in
-					let undo = snapshot_of t :: t.undo in
-					let doc = ref t.doc in
-					for i = 1 to n do
-						doc := Doc.insert_line (line + i) line_text !doc
-					done;
-					{ t with
-						doc = !doc;
-						cursor = clamp_cursor !doc
-							{ t.cursor with line = line + n };
-						dirty = true;
-						undo;
-						redo = [];
-						burst = None;
-						message = Some
-							(Printf.sprintf "duplicated %d line%s"
-								n (if n = 1 then "" else "s"));
-					}
-				| ["theme"] ->
-					let current = t.theme_name in
-					let names = Theme.names in
-					let rec next = function
-						| [] -> List.hd names
-						| [_] -> List.hd names
-						| a :: b :: _ when a = current -> b
-						| _ :: rest -> next rest
-					in
-					let name = next names in
-					{ t with
-						theme_name = name;
-						message = Some
-							(Printf.sprintf "theme: %s" name);
-					}
-				| "theme" :: name :: _ ->
-					let name = String.lowercase_ascii name in
-					(match Theme.by_name name with
-					| Some _ ->
+								mark = None;
+							}
+					| "replace" :: rest ->
+						let split_at_with words =
+							let rec loop left = function
+								| [] -> None
+								| "with" :: r ->
+									Some (
+										String.concat " " (List.rev left),
+										String.concat " " r
+									)
+								| w :: r -> loop (w :: left) r
+							in
+							loop [] words
+						in
+						(match split_at_with rest with
+						| None | Some ("", _) | Some (_, "") ->
+							{ t with
+								message = Some "usage: replace <old> with <new>";
+							}
+						| Some (old_text, new_text) ->
+							let undo = { snap_doc = t.doc; snap_cursor = t.cursor } :: t.undo in
+							let total = ref 0 in
+							let doc = ref t.doc in
+							for i = 0 to Doc.line_count t.doc - 1 do
+								match Doc.get_line i !doc with
+								| None -> ()
+								| Some line ->
+									let ol = String.length old_text in
+									let buf = Stdlib.Buffer.create (String.length line) in
+									let j = ref 0 in
+									let cnt = ref 0 in
+									let ll = String.length line in
+									while !j <= ll - ol do
+										if String.sub line !j ol = old_text then begin
+											Stdlib.Buffer.add_string buf new_text;
+											j := !j + ol;
+											incr cnt
+										end else begin
+											Stdlib.Buffer.add_char buf line.[!j];
+											incr j
+										end
+									done;
+									while !j < ll do
+										Stdlib.Buffer.add_char buf line.[!j];
+										incr j
+									done;
+									if !cnt > 0 then begin
+										doc := Doc.replace_line i
+											(Stdlib.Buffer.contents buf) !doc;
+										total := !total + !cnt
+									end
+							done;
+							if !total = 0 then
+								{ t with message = Some "no matches found" }
+							else
+								{ t with
+									doc = !doc;
+									dirty = true;
+									undo;
+									redo = [];
+									burst = None;
+									message = Some
+										(Printf.sprintf "replaced %d occurrence%s"
+											!total
+											(if !total = 1 then "" else "s"));
+								})
+					| "dup" :: rest ->
+						let n =
+							match rest with
+							| n_s :: _ ->
+								(match int_of_string_opt n_s with
+								| Some n -> max 1 n
+								| None -> 1)
+							| [] -> 1
+						in
+						let line = t.cursor.line in
+						let line_text =
+							Option.value
+								(Doc.get_line line t.doc) ~default:""
+						in
+						let undo = { snap_doc = t.doc; snap_cursor = t.cursor } :: t.undo in
+						let doc = ref t.doc in
+						for i = 1 to n do
+							doc := Doc.insert_line (line + i) line_text !doc
+						done;
+						{ t with
+							doc = !doc;
+							cursor = Buf.clamp_cursor !doc
+								{ t.cursor with line = line + n };
+							dirty = true;
+							undo;
+							redo = [];
+							burst = None;
+							message = Some
+								(Printf.sprintf "duplicated %d line%s"
+									n (if n = 1 then "" else "s"));
+						}
+					| ["theme"] ->
+						let current = t.theme_name in
+						let names = Theme.names in
+						let rec next = function
+							| [] -> List.hd names
+							| [_] -> List.hd names
+							| a :: b :: _ when a = current -> b
+							| _ :: rest -> next rest
+						in
+						let name = next names in
 						{ t with
 							theme_name = name;
 							message = Some
 								(Printf.sprintf "theme: %s" name);
 						}
-					| None ->
+					| "theme" :: name :: _ ->
+						let name = String.lowercase_ascii name in
+						(match Theme.by_name name with
+						| Some _ ->
+							{ t with
+								theme_name = name;
+								message = Some
+									(Printf.sprintf "theme: %s" name);
+							}
+						| None ->
+							{ t with
+								message = Some
+									(Printf.sprintf
+										"unknown theme (available: %s)"
+										(String.concat ", " Theme.names));
+							})
+					| ["help"] ->
 						{ t with
 							message = Some
-								(Printf.sprintf
-									"unknown theme (available: %s)"
-									(String.concat ", " Theme.names));
-						})
-				| ["help"] ->
-					{ t with
-						message = Some
-							"Ctrl-F:find Ctrl-S:save Ctrl-Z:undo \
-							 Ctrl-Y:redo Ctrl-O:open \
-							 ESC/Shift+Space:commands";
-					}
-				| ["wrap"] ->
-					{ t with message = Some "use Alt-Z to toggle wrap" }
-				| ["numbers"] ->
-					{ t with message = Some "use Alt-L to toggle line numbers" }
-				| ["diff"] | ["diffs"] ->
-					{ t with message = Some "use Alt-D to toggle diff markers" }
-				| _ ->
-					{ t with
-						message = Some
-							(Printf.sprintf "unknown command: %s" input);
-					}
-			end
-		| _ -> t)
-	| Command.Open_file_commit ->
-		(match t.mode with
-		| Opening_file of_state ->
-			if of_state.path = "" then
-				{ t with mode = Edit; message = Some "no path" }
-			else if t.dirty then
-				{ t with
-					mode = Edit;
-					message = Some "unsaved changes — save first";
-				}
-			else begin
-				try of_file of_state.path
-				with e ->
+								"Ctrl-F:find Ctrl-S:save Ctrl-Z:undo \
+								 Ctrl-Y:redo Ctrl-O:open \
+								 ESC/Shift+Space:commands";
+						}
+					| ["wrap"] ->
+						{ t with message = Some "use Alt-Z to toggle wrap" }
+					| ["numbers"] ->
+						{ t with message = Some "use Alt-L to toggle line numbers" }
+					| ["diff"] | ["diffs"] ->
+						{ t with message = Some "use Alt-D to toggle diff markers" }
+					| _ ->
+						{ t with
+							message = Some
+								(Printf.sprintf "unknown command: %s" input);
+						}
+				end
+			| _ -> t)
+		| Command.Open_file_commit ->
+			(match t.mode with
+			| Opening_file of_state ->
+				if of_state.path = "" then
+					{ t with mode = Edit; message = Some "no path" }
+				else if t.dirty then
 					{ t with
 						mode = Edit;
-						message = Some ("open failed: " ^ Printexc.to_string e);
+						message = Some "unsaved changes — save first";
 					}
-			end
-		| _ -> t)
+				else begin
+					try of_file of_state.path
+					with e ->
+						{ t with
+							mode = Edit;
+							message = Some ("open failed: " ^ Printexc.to_string e);
+						}
+				end
+			| _ -> t)
+		(* Buffer commands handled above — this catch-all is
+		   unreachable but silences the exhaustiveness warning
+		   since to_buffer_command returns Some for all of them. *)
+		| Command.Insert _ | Command.Insert_newline
+		| Command.Delete _ | Command.Indent_block
+		| Command.Outdent_block | Command.Move_cursor _
+		| Command.Extend_cursor _ | Command.Set_mark
+		| Command.Clear_mark | Command.Copy | Command.Cut
+		| Command.Paste | Command.Undo | Command.Redo ->
+			(* Already handled by to_buffer_command *)
+			t
