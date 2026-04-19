@@ -1,3 +1,4 @@
 (library
  (name twig)
+ (public_name twig)
  (libraries unix uutf uucp uuseg uuseg.string))
