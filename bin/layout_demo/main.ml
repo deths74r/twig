@@ -110,7 +110,7 @@ let render (s : state) : string =
 	(* Clear screen + home cursor, then capture Layout.render's
 	   side-effecting output to a buffer so Twig.Loop can emit
 	   it as a single terminal write. *)
-	let rendered, () = Terminal.with_capture (fun () ->
+	let rendered, _cursor = Terminal.with_capture (fun () ->
 		Layout.render s.layout ~rect:s.rect ~theme:Theme.default)
 	in
 	"\x1b[2J\x1b[H" ^ rendered

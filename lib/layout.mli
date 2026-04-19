@@ -17,10 +17,20 @@ type dir = Horizontal | Vertical
     Matches vim convention: [:split] is horizontal,
     [:vsplit] is vertical. *)
 
+type render_mode =
+	| Markdown
+	| Plain of {
+			prefix_first : string;
+			prefix_rest  : string;
+			prefix_style : Theme.style option;
+		}
+
 type pane = {
-	buf      : Buf.t;
-	viewport : Viewport.t;
-	title    : string option;
+	buf         : Buf.t;
+	viewport    : Viewport.t;
+	title       : string option;
+	render_mode : render_mode;
+	min_rows    : int;
 }
 
 type tree =
@@ -41,11 +51,11 @@ type t = {
 
 (** {1 Construction} *)
 
-val single : ?title:string -> Buf.t -> unit -> t
+val single : ?title:string -> ?render_mode:render_mode -> ?min_rows:int -> Buf.t -> unit -> t
 (** [single buf ()] returns a one-leaf layout with [buf] at the
     root and focus on it. *)
 
-val split : t -> dir -> ?title:string -> Buf.t -> unit -> t
+val split : t -> dir -> ?title:string -> ?render_mode:render_mode -> ?min_rows:int -> Buf.t -> unit -> t
 (** [split t dir buf ()] splits the focused leaf: the leaf at
     [t.focus_path] is replaced by a [Split] whose left/top child
     is the original leaf and right/bottom child is a new leaf
@@ -146,7 +156,7 @@ val equalize : t -> t
 
 (** {1 Render} *)
 
-val render : t -> rect:Rect.t -> theme:Theme.t -> unit
+val render : t -> rect:Rect.t -> theme:Theme.t -> (int * int) option
 (** Render the layout to the terminal via [Terminal.write_at]
     under [Terminal.with_clip] (spec 18_tui.md §9). Each leaf
     is drawn inside its computed sub-rect:

@@ -176,6 +176,8 @@ let () =
 			Layout.buf = b_new;
 			viewport = Viewport.make ~rows:0 ~cols:0;
 			title = Some "swapped";
+			render_mode = Markdown;
+			min_rows = 20;
 		} in
 		let t' = Layout.replace_leaf t ~path:[] new_pane in
 		match Layout.focus t' with
@@ -188,6 +190,8 @@ let () =
 			Layout.buf = Buf.empty;
 			viewport = Viewport.make ~rows:0 ~cols:0;
 			title = None;
+			render_mode = Markdown;
+			min_rows = 20;
 		} in
 		let t' = Layout.replace_leaf t ~path:[ 42 ] dummy in
 		(* original tree preserved *)
@@ -369,7 +373,7 @@ let () =
 	test "render single leaf no title emits only content" (fun () ->
 		let t = Layout.single Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* No title → no style-ANSI codes for chrome *)
 		assert (not (contains out "title"));
@@ -383,7 +387,7 @@ let () =
 	test "render leaf with title includes title text" (fun () ->
 		let t = Layout.single ~title:"hello" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (contains out "hello"));
 
@@ -393,7 +397,7 @@ let () =
 			Buf.empty ()
 		in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Title truncated to 10 bytes, so "this is a" prefix still there *)
 		assert (contains out "this is a "));
@@ -401,7 +405,7 @@ let () =
 	test "render pads short title to width" (fun () ->
 		let t = Layout.single ~title:"ab" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:10 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Title "ab" padded to 10: "ab        " (8 spaces) *)
 		assert (contains out "ab        "));
@@ -416,7 +420,7 @@ let () =
 		let t = { t with focus_path = [ 1 ] } in
 		let t = Layout.split t Horizontal ~title:"BR" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:80 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (contains out "TL");
 		assert (contains out "TR");
@@ -427,7 +431,7 @@ let () =
 		let t = Layout.single ~title:"A" Buf.empty () in
 		let t = Layout.split t Vertical ~title:"B" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Focused style for default theme includes bold + bg24 *)
 		let focused_ansi =
@@ -455,7 +459,7 @@ let () =
 			| None -> t
 		in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* top_line=2 means first visible row is line2 *)
 		assert (contains out "line2"));
@@ -463,14 +467,14 @@ let () =
 	test "render empty-rect leaf produces no output" (fun () ->
 		let t = Layout.single ~title:"X" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:0 ~cols:0 in
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (out = ""));
 
 	(* ------- markdown-styled content rendering (spec §9) ------- *)
 
 	let render_capture t r =
-		let out, () = Terminal.with_capture (fun () ->
+		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
 		out
 	in

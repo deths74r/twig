@@ -1,9 +1,19 @@
 type dir = Horizontal | Vertical
 
+type render_mode =
+	| Markdown
+	| Plain of {
+		prefix_first : string;
+		prefix_rest  : string;
+		prefix_style : Theme.style option;
+	}
+
 type pane = {
-	buf      : Buf.t;
-	viewport : Viewport.t;
-	title    : string option;
+	buf         : Buf.t;
+	viewport    : Viewport.t;
+	title       : string option;
+	render_mode : render_mode;
+	min_rows    : int;
 }
 
 type tree =
@@ -24,10 +34,12 @@ type t = {
 
 let default_viewport = Viewport.make ~rows:0 ~cols:0
 
-let make_pane ?title buf = {
+let make_pane ?title ?(render_mode=Markdown) ?(min_rows=0) buf = {
 	buf;
 	viewport = default_viewport;
 	title;
+	render_mode;
+	min_rows;
 }
 
 (* ------------------------------------------------------------------ *)
@@ -56,14 +68,14 @@ let rec replace_subtree tree path replacement =
 (* Construction                                                       *)
 (* ------------------------------------------------------------------ *)
 
-let single ?title buf () =
-	{ root = Leaf (make_pane ?title buf); focus_path = [] }
+let single ?title ?render_mode ?min_rows buf () =
+	{ root = Leaf (make_pane ?title ?render_mode ?min_rows buf); focus_path = [] }
 
-let split t dir ?title buf () =
+let split t dir ?title ?render_mode ?min_rows buf () =
 	match find_subtree_opt t.root t.focus_path with
 	| None -> t
 	| Some original ->
-			let new_leaf = Leaf (make_pane ?title buf) in
+			let new_leaf = Leaf (make_pane ?title ?render_mode ?min_rows buf) in
 			let replacement =
 				Split { dir; ratio = 0.5;
 				        left = original; right = new_leaf }
@@ -326,22 +338,39 @@ let rec subtree_rect tree rect path =
 	| _ -> None
 
 (** Return the minimum/maximum ratio so that both sides of a split
-    with [dir] inside [parent_rect] get at least [minimum_cells]. *)
-let ratio_bounds (dir : dir) (parent_rect : Rect.t) =
+    with [dir] inside [parent_rect] get at least their minimum size. *)
+let ratio_bounds (dir : dir) (parent_rect : Rect.t) (s : tree) =
+	let rec min_req tree =
+		match tree with
+		| Leaf p ->
+				(match dir with
+				 | Horizontal -> max p.min_rows minimum_cells
+				 | Vertical -> minimum_cells)
+		| Split s_child ->
+				if s_child.dir = dir then
+					min_req s_child.left + min_req s_child.right
+				else
+					max (min_req s_child.left) (min_req s_child.right)
+	in
 	let extent =
 		match dir with
 		| Horizontal -> parent_rect.rows
 		| Vertical -> parent_rect.cols
 	in
-	if extent <= 2 * minimum_cells then
-		(* Not enough space for two minimum-sized children.
-		   Fall back to the old ratio floor so we don't produce
-		   unusable 0/everything splits. *)
-		(0.05, 0.95)
-	else
-		let lo = float_of_int minimum_cells /. float_of_int extent in
-		let hi = 1.0 -. lo in
-		(lo, hi)
+	match s with
+	| Leaf _ -> (0.05, 0.95)
+	| Split { left; right; _ } ->
+		let min_left = min_req left in
+		let min_right = min_req right in
+		
+		if extent <= min_left + min_right then
+			(* Not enough space. Fall back to the old ratio floor so we don't
+			   produce unusable 0/everything splits. *)
+			(0.05, 0.95)
+		else
+			let lo = float_of_int min_left /. float_of_int extent in
+			let hi = 1.0 -. (float_of_int min_right /. float_of_int extent) in
+			(lo, hi)
 
 let clamp_bounded lo hi r =
 	if r < lo then lo
@@ -367,7 +396,7 @@ let resize t ~rect ~delta =
 						| Some r -> r
 						| None -> rect
 					in
-					let lo, hi = ratio_bounds s.dir parent_rect in
+					let lo, hi = ratio_bounds s.dir parent_rect (Split s) in
 					let new_ratio = clamp_bounded lo hi raw in
 					let new_parent = Split { s with ratio = new_ratio } in
 					let new_root =
@@ -455,10 +484,11 @@ let render_line ~target_row ~target_col ~max_cols ~line
 	if !remaining > 0 then
 		Terminal.write (String.make !remaining ' ')
 
-let render_content (pane : pane) (rect : Rect.t) ~theme =
+let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 	let title_rows = if pane.title <> None then 1 else 0 in
 	let content_start = rect.row + title_rows in
 	let content_rows = rect.rows - title_rows in
+	let cursor_pos = ref None in
 	if content_rows <= 0 || rect.cols <= 0 then ()
 	else begin
 		let doc = pane.buf.Buf.doc in
@@ -485,28 +515,53 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 			let line =
 				Option.value (Doc.get_line !doc_row doc) ~default:""
 			in
-			let spans, s =
-				Markdown.tokenize_line ~state:!state ~line ~theme:md_theme
+			
+			let segments, prefix_len, line_text, spans =
+				match pane.render_mode with
+				| Markdown ->
+						let spans, s =
+							Markdown.tokenize_line ~state:!state ~line ~theme:md_theme
+						in
+						state := s;
+						let segments =
+							if pane.viewport.Viewport.wrap then
+								Viewport.wrap_line line wrap_width
+							else
+								[{ Viewport.start_gi = 0;
+								   end_gi = Grapheme.count line }]
+						in
+						segments, 0, line, spans
+				| Plain { prefix_first; prefix_rest; prefix_style } ->
+						let prefix = if !doc_row = 0 then prefix_first else prefix_rest in
+						let prefix_byte_len = String.length prefix in
+						let prefix_gi_len = Grapheme.count prefix in
+						let line_text = prefix ^ line in
+						let segments =
+							if pane.viewport.Viewport.wrap then
+								Viewport.wrap_line line_text wrap_width
+							else
+								[{ Viewport.start_gi = 0;
+								   end_gi = Grapheme.count line_text }]
+						in
+						let spans =
+							match prefix_style with
+							| Some style -> [{ Markdown.start = 0; stop = prefix_byte_len; style }]
+							| None -> []
+						in
+						segments, prefix_gi_len, line_text, spans
 			in
-			state := s;
-			let segments =
-				if pane.viewport.Viewport.wrap then
-					Viewport.wrap_line line wrap_width
-				else
-					[{ Viewport.start_gi = 0;
-					   end_gi = Grapheme.count line }]
-			in
+			
 			List.iter
 				(fun (seg : Viewport.segment) ->
 					if !screen_row < content_rows then begin
 						(* Extract the substring for this segment *)
 						let seg_start_byte =
-							Grapheme.byte_of_index line seg.start_gi
+							Grapheme.byte_of_index line_text seg.start_gi
 						in
 						let seg_end_byte =
-							Grapheme.byte_of_index line seg.end_gi
+							Grapheme.byte_of_index line_text seg.end_gi
 						in
-						let seg_text = String.sub line seg_start_byte
+						let seg_text = String.sub line_text seg_start_byte
 							(seg_end_byte - seg_start_byte)
 						in
 						(* Filter spans to this segment's byte range *)
@@ -523,6 +578,20 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 										stop = e - seg_start_byte })
 							spans
 						in
+						
+						(* Track cursor position *)
+						if focused && !doc_row = pane.buf.cursor.line then begin
+							let cursor_col = pane.buf.cursor.column + prefix_len in
+							if cursor_col >= seg.start_gi && cursor_col <= seg.end_gi then begin
+								(* Only set cursor if it falls in the *visible* part of the line.
+								   For wrapped lines, the cursor is on the segment where it's <= end_gi,
+								   except if it's strictly < end_gi OR it's the very end of the line. *)
+								let is_last_seg = seg.end_gi = Grapheme.count line_text in
+								if cursor_col < seg.end_gi || is_last_seg then
+									cursor_pos := Some (content_start + !screen_row, rect.col + (cursor_col - seg.start_gi))
+							end
+						end;
+						
 						render_line
 							~target_row:(content_start + !screen_row)
 							~target_col:rect.col
@@ -539,15 +608,19 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 				~row:(content_start + i) ~col:rect.col;
 			Terminal.write (String.make rect.cols ' ')
 		done
-	end
+	end;
+	!cursor_pos
 
 let render t ~rect ~theme =
 	let leaves = leaf_rects_of_tree t.root rect in
+	let cursor_pos = ref None in
 	List.iter
 		(fun (path, pane, r) ->
 			if not (Rect.is_empty r) then
 				Terminal.with_clip r (fun () ->
 					let focused = path = t.focus_path in
 					render_title pane r ~focused ~theme;
-					render_content pane r ~theme))
-		leaves
+					let c = render_content pane r ~theme ~focused in
+					if focused then cursor_pos := c))
+		leaves;
+	!cursor_pos
