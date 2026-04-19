@@ -126,6 +126,7 @@ let save t =
 			Sys.rename tmp path;
 			{ t with
 				dirty = false;
+				doc = Doc.clear_markers t.doc;
 				message = Some (Printf.sprintf "saved %s" path);
 			}
 		with e ->
@@ -543,6 +544,7 @@ let apply cmd t =
 		| _ -> t)
 	| Command.Toggle_wrap -> t
 	| Command.Toggle_line_numbers -> t
+	| Command.Toggle_diff_markers -> t
 	| Command.Enter_command_chord ->
 		{ t with mode = Command_chord; burst = None }
 	| Command.Enter_command_prompt prefix ->
@@ -767,6 +769,8 @@ let apply cmd t =
 					{ t with message = Some "use Alt-Z to toggle wrap" }
 				| ["numbers"] ->
 					{ t with message = Some "use Alt-L to toggle line numbers" }
+				| ["diff"] | ["diffs"] ->
+					{ t with message = Some "use Alt-D to toggle diff markers" }
 				| _ ->
 					{ t with
 						message = Some

@@ -63,6 +63,7 @@ let command_in_chord (_state : State.t) (event : Input.event)
 		| "t" -> Some (Enter_command_prompt "theme ")
 		| "w" -> Some Toggle_wrap
 		| "n" -> Some Toggle_line_numbers
+		| "D" -> Some Toggle_diff_markers
 		| "u" -> Some Undo
 		| "U" -> Some Redo
 		| "h" -> Some (Enter_command_prompt "help")
@@ -227,6 +228,7 @@ let command_in_edit (ui : Ui.t) (state : State.t) (event : Input.event)
 	| Ctrl 'v' -> Some Paste
 	| Alt 'z' -> Some Toggle_wrap
 	| Alt 'l' -> Some Toggle_line_numbers
+	| Alt 'd' -> Some Toggle_diff_markers
 	| Shift_space -> Some Enter_command_chord
 	| Eof -> Some Quit
 	| Escape ->
@@ -285,6 +287,10 @@ let main_loop (initial_state : State.t) (initial_ui : Ui.t) =
 			| Toggle_line_numbers ->
 				ui := { !ui with
 					show_line_numbers = not (!ui).show_line_numbers
+				}
+			| Toggle_diff_markers ->
+				ui := { !ui with
+					show_diff_markers = not (!ui).show_diff_markers
 				}
 			| _ -> ())
 		| None -> ())

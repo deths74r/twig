@@ -1,3 +1,5 @@
+type mark = Unchanged | Added | Modified
+
 type measure = {
 	lines : int;
 	bytes : int;
@@ -7,6 +9,7 @@ type t =
 	| Empty
 	| Node of {
 		line : string;
+		mark : mark;
 		left : t;
 		right : t;
 		height : int;
@@ -26,9 +29,10 @@ let byte_sum = function
 	| Empty -> 0
 	| Node n -> n.byte_sum
 
-let make_raw line left right =
+let make_raw line mark left right =
 	Node {
 		line;
+		mark;
 		left;
 		right;
 		height = 1 + max (height left) (height right);
@@ -39,21 +43,21 @@ let make_raw line left right =
 let rotate_left t =
 	match t with
 	| Node {
-		line = x; left = a;
-		right = Node { line = y; left = b; right = c; _ };
+		line = x; mark = mx; left = a;
+		right = Node { line = y; mark = my; left = b; right = c; _ };
 		_
 	} ->
-		make_raw y (make_raw x a b) c
+		make_raw y my (make_raw x mx a b) c
 	| _ -> t
 
 let rotate_right t =
 	match t with
 	| Node {
-		line = y;
-		left = Node { line = x; left = a; right = b; _ };
+		line = y; mark = my;
+		left = Node { line = x; mark = mx; left = a; right = b; _ };
 		right = c; _
 	} ->
-		make_raw x a (make_raw y b c)
+		make_raw x mx a (make_raw y my b c)
 	| _ -> t
 
 let balance_factor = function
@@ -65,20 +69,22 @@ let balance t =
 	if bf > 1 then
 		match t with
 		| Node n when balance_factor n.left < 0 ->
-			rotate_right (make_raw n.line (rotate_left n.left) n.right)
+			rotate_right
+				(make_raw n.line n.mark (rotate_left n.left) n.right)
 		| _ -> rotate_right t
 	else if bf < -1 then
 		match t with
 		| Node n when balance_factor n.right > 0 ->
-			rotate_left (make_raw n.line n.left (rotate_right n.right))
+			rotate_left
+				(make_raw n.line n.mark n.left (rotate_right n.right))
 		| _ -> rotate_left t
 	else t
 
-let make line left right = balance (make_raw line left right)
+let make line mark left right = balance (make_raw line mark left right)
 
 let empty = Empty
 
-let singleton line = make line Empty Empty
+let singleton_with mark line = make line mark Empty Empty
 
 let line_count = size_of
 
@@ -96,24 +102,40 @@ let rec get_line i t =
 		else if i = ls then Some line
 		else get_line (i - ls - 1) right
 
-let rec insert_line i new_line t =
+let rec get_mark i t =
+	match t with
+	| Empty -> Unchanged
+	| Node { left; mark; right; _ } ->
+		let ls = size_of left in
+		if i < ls then get_mark i left
+		else if i = ls then mark
+		else get_mark (i - ls - 1) right
+
+let rec insert_line_with new_mark i new_line t =
 	match t with
 	| Empty ->
-		if i <= 0 then singleton new_line else Empty
-	| Node { left; line; right; _ } ->
+		if i <= 0 then singleton_with new_mark new_line else Empty
+	| Node { left; line; mark; right; _ } ->
 		let ls = size_of left in
 		if i <= ls then
-			make line (insert_line i new_line left) right
+			make line mark
+				(insert_line_with new_mark i new_line left) right
 		else
-			make line left (insert_line (i - ls - 1) new_line right)
+			make line mark left
+				(insert_line_with new_mark (i - ls - 1) new_line right)
+
+let insert_line ?(marker = Added) i new_line t =
+	insert_line_with marker i new_line t
 
 let rec extract_min = function
 	| Empty -> None
-	| Node { left = Empty; line; right; _ } -> Some (line, right)
-	| Node { left; line; right; _ } ->
+	| Node { left = Empty; line; mark; right; _ } ->
+		Some (line, mark, right)
+	| Node { left; line; mark; right; _ } ->
 		(match extract_min left with
 		| None -> None
-		| Some (m, new_left) -> Some (m, make line new_left right))
+		| Some (l, m, new_left) ->
+			Some (l, m, make line mark new_left right))
 
 let concat_siblings a b =
 	match a, b with
@@ -122,38 +144,48 @@ let concat_siblings a b =
 	| _ ->
 		match extract_min b with
 		| None -> a
-		| Some (m, b') -> make m a b'
+		| Some (l, m, b') -> make l m a b'
 
 let rec delete_line i t =
 	match t with
 	| Empty -> Empty
-	| Node { left; line; right; _ } ->
+	| Node { left; line; mark; right; _ } ->
 		let ls = size_of left in
 		if i < ls then
-			make line (delete_line i left) right
+			make line mark (delete_line i left) right
 		else if i = ls then
 			concat_siblings left right
 		else
-			make line left (delete_line (i - ls - 1) right)
+			make line mark left (delete_line (i - ls - 1) right)
+
+let promote_mark = function
+	| Unchanged -> Modified
+	| m -> m
 
 let rec replace_line i new_line t =
 	match t with
 	| Empty -> Empty
-	| Node { left; line; right; _ } ->
+	| Node { left; line; mark; right; _ } ->
 		let ls = size_of left in
 		if i < ls then
-			make line (replace_line i new_line left) right
+			make line mark (replace_line i new_line left) right
 		else if i = ls then
-			make new_line left right
+			make new_line (promote_mark mark) left right
 		else
-			make line left (replace_line (i - ls - 1) new_line right)
+			make line mark left (replace_line (i - ls - 1) new_line right)
+
+let rec clear_markers t =
+	match t with
+	| Empty -> Empty
+	| Node { line; left; right; _ } ->
+		make line Unchanged (clear_markers left) (clear_markers right)
 
 let of_string s =
 	if s = "" then Empty
 	else begin
 		let lines = String.split_on_char '\n' s in
 		List.fold_left
-			(fun acc l -> insert_line (size_of acc) l acc)
+			(fun acc l -> insert_line_with Unchanged (size_of acc) l acc)
 			Empty lines
 	end
 
@@ -161,7 +193,8 @@ let of_channel ic =
 	let acc = ref Empty in
 	(try
 		while true do
-			acc := insert_line (size_of !acc) (input_line ic) !acc
+			acc := insert_line_with Unchanged (size_of !acc)
+				(input_line ic) !acc
 		done
 	with End_of_file -> ());
 	!acc

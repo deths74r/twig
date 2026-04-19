@@ -90,6 +90,19 @@ let by_name name =
 
 let names = List.map fst all
 
+let bracket_colors = [|
+	"\x1b[38;5;178m";
+	"\x1b[38;5;141m";
+	"\x1b[38;5;73m";
+	"\x1b[38;5;209m";
+|]
+
+let gutter_added = "\x1b[38;5;114m"
+
+let gutter_modified = "\x1b[38;5;179m"
+
+let bracket_match = "\x1b[1;48;5;238m"
+
 let color_for (theme : t) (token : Syntax.token) =
 	match token with
 	| Text -> theme.text

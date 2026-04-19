@@ -124,8 +124,18 @@ let grapheme_at_col_in_segment line (seg : segment) target_col =
 	if not !found then result := !grapheme_idx;
 	!result
 
+let is_bracket c =
+	c = '(' || c = ')' || c = '[' || c = ']' || c = '{' || c = '}'
+
+let is_opening c = c = '(' || c = '[' || c = '{'
+
+let bracket_color depth =
+	let n = Array.length Theme.bracket_colors in
+	Theme.bracket_colors.((max 0 depth) mod n)
+
 let emit_segment buf line spans (theme : Theme.t) (seg : segment)
-		max_width sel_range match_ranges =
+		max_width sel_range match_ranges
+		bracket_depth bracket_match doc_row =
 	let col = ref 0 in
 	let grapheme_idx = ref 0 in
 	let stopped = ref false in
@@ -177,6 +187,36 @@ let emit_segment buf line spans (theme : Theme.t) (seg : segment)
 						enter_style want syntax_color;
 						current := want
 					end;
+					let is_bracket_cluster =
+						String.length cluster = 1
+						&& is_bracket cluster.[0]
+						&& (span.kind = Text || span.kind = Keyword
+							|| span.kind = Type_kw)
+					in
+					let is_match_pos =
+						match bracket_match with
+						| Some (p : Position.t) ->
+							p.line = doc_row
+							&& p.column = !grapheme_idx
+						| None -> false
+					in
+					if is_bracket_cluster && !current = Plain then begin
+						let ch = cluster.[0] in
+						if is_match_pos then
+							Buffer.add_string buf Theme.bracket_match
+						else if is_opening ch then
+							Buffer.add_string buf
+								(bracket_color !bracket_depth)
+						else
+							Buffer.add_string buf
+								(bracket_color (max 0 (!bracket_depth - 1)));
+						Buffer.add_string buf cluster;
+						Buffer.add_string buf theme.reset;
+						Buffer.add_string buf syntax_color;
+						if is_opening ch then incr bracket_depth
+						else bracket_depth := max 0 (!bracket_depth - 1);
+						col := !col + 1
+					end else
 					if cluster = "\t" then begin
 						let next = ((!col / tab_width) + 1) * tab_width in
 						let spaces = next - !col in
@@ -207,10 +247,11 @@ let digits_of n =
 		loop n 0
 
 let gutter_width (state : State.t) (ui : Ui.t) =
-	if not ui.show_line_numbers then 0
-	else
+	if ui.show_line_numbers then
 		let n = Doc.line_count state.doc in
 		digits_of (max 1 n) + 1
+	else if ui.show_diff_markers then 1
+	else 0
 
 let find_all_in_line line query =
 	if query = "" then []
@@ -245,6 +286,187 @@ let line_match_ranges (state : State.t) line_text =
 			(gi, gi + query_graphemes)
 		) byte_offsets
 	| _ -> []
+
+let closing_of = function
+	| '(' -> ')' | '[' -> ']' | '{' -> '}' | c -> c
+
+let opening_of = function
+	| ')' -> '(' | ']' -> '[' | '}' -> '{' | c -> c
+
+let gutter_mark_for (state : State.t) line =
+	match Doc.get_mark line state.doc with
+	| Doc.Unchanged -> `None
+	| Doc.Added -> `Added
+	| Doc.Modified -> `Modified
+
+let compute_bracket_depth (state : State.t) (ui : Ui.t) lang =
+	let depth = ref 0 in
+	for i = 0 to ui.top_line - 1 do
+		match Doc.get_line i state.doc with
+		| None -> ()
+		| Some line ->
+			let spans, _ =
+				Syntax.tokenize_line line Syntax.Normal lang
+			in
+			List.iter (fun (span : Syntax.span) ->
+				if span.kind = Text || span.kind = Keyword
+					|| span.kind = Type_kw
+				then begin
+					let text = String.sub line span.start span.length in
+					String.iter (fun c ->
+						if is_opening c then incr depth
+						else if is_bracket c && not (is_opening c) then
+							depth := max 0 (!depth - 1)
+					) text
+				end
+			) spans
+	done;
+	!depth
+
+let find_bracket_match (state : State.t) lang =
+	match Doc.get_line state.cursor.line state.doc with
+	| None -> None
+	| Some line ->
+		let byte = Grapheme.byte_of_index line state.cursor.column in
+		if byte >= String.length line then None
+		else begin
+			let c = Char.chr (Char.code line.[byte]) in
+			if not (is_bracket c) then None
+			else if is_opening c then begin
+				let target = closing_of c in
+				let depth = ref 1 in
+				let result = ref None in
+				let start_col = state.cursor.column + 1 in
+				let max_lines =
+					min (Doc.line_count state.doc)
+						(state.cursor.line + 5000)
+				in
+				let i = ref state.cursor.line in
+				let stop = ref false in
+				while !i < max_lines && not !stop do
+					(match Doc.get_line !i state.doc with
+					| None -> ()
+					| Some l ->
+						let spans, _ =
+							Syntax.tokenize_line l Syntax.Normal lang
+						in
+						List.iter (fun (span : Syntax.span) ->
+							if !stop then ()
+							else if span.kind = Text || span.kind = Keyword
+								|| span.kind = Type_kw
+							then begin
+								let text =
+									String.sub l span.start span.length
+								in
+								let gi = ref 0 in
+								iter_clusters (fun cluster ->
+									if !stop then ()
+									else begin
+										let abs_gi =
+											Grapheme.index_of_byte l
+												(span.start
+												+ Grapheme.byte_of_index
+													text !gi)
+										in
+										let skip =
+											!i = state.cursor.line
+											&& abs_gi < start_col
+										in
+										if not skip
+											&& String.length cluster = 1
+										then begin
+											let ch = cluster.[0] in
+											if ch = c then incr depth
+											else if ch = target then begin
+												decr depth;
+												if !depth = 0 then begin
+													result := Some {
+														Position.line = !i;
+														column = abs_gi;
+													};
+													stop := true
+												end
+											end
+										end;
+										incr gi
+									end
+								) text
+							end
+						) spans);
+					incr i
+				done;
+				!result
+			end else begin
+				let target = opening_of c in
+				let depth = ref 1 in
+				let result = ref None in
+				let end_col = state.cursor.column in
+				let min_line =
+					max 0 (state.cursor.line - 5000)
+				in
+				let i = ref state.cursor.line in
+				let stop = ref false in
+				while !i >= min_line && not !stop do
+					(match Doc.get_line !i state.doc with
+					| None -> ()
+					| Some l ->
+						let spans, _ =
+							Syntax.tokenize_line l Syntax.Normal lang
+						in
+						let rev_spans = List.rev spans in
+						List.iter (fun (span : Syntax.span) ->
+							if !stop then ()
+							else if span.kind = Text || span.kind = Keyword
+								|| span.kind = Type_kw
+							then begin
+								let text =
+									String.sub l span.start span.length
+								in
+								let clusters = ref [] in
+								let gi = ref 0 in
+								iter_clusters (fun cluster ->
+									let abs_gi =
+										Grapheme.index_of_byte l
+											(span.start
+											+ Grapheme.byte_of_index
+												text !gi)
+									in
+									clusters :=
+										(abs_gi, cluster) :: !clusters;
+									incr gi
+								) text;
+								List.iter (fun (abs_gi, cluster) ->
+									if !stop then ()
+									else begin
+										let skip =
+											!i = state.cursor.line
+											&& abs_gi >= end_col
+										in
+										if not skip
+											&& String.length cluster = 1
+										then begin
+											let ch = cluster.[0] in
+											if ch = c then incr depth
+											else if ch = target then begin
+												decr depth;
+												if !depth = 0 then begin
+													result := Some {
+														Position.line = !i;
+														column = abs_gi;
+													};
+													stop := true
+												end
+											end
+										end
+									end
+								) !clusters
+							end
+						) rev_spans);
+					decr i
+				done;
+				!result
+			end
+		end
 
 let line_selection_range (state : State.t) line =
 	match state.mark with
@@ -284,20 +506,26 @@ let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 	let doc_row = ref ui.top_line in
 	let cursor_screen = ref None in
 	let total_lines = Doc.line_count state.doc in
+	let bracket_depth = ref (compute_bracket_depth state ui lang) in
+	let bracket_match = find_bracket_match state lang in
 	while !screen_row < ch do
 		if !doc_row >= total_lines then begin
 			move_cursor buf !screen_row 0;
 			clear_line buf;
-			if gutter > 1 then begin
-				Buffer.add_string buf "\x1b[90m";
-				Buffer.add_string buf (String.make (gutter - 2) ' ');
-				Buffer.add_char buf '~';
-				Buffer.add_string buf "\x1b[0m";
-				Buffer.add_char buf ' '
-			end else if gutter = 1 then begin
-				Buffer.add_string buf "\x1b[90m";
-				Buffer.add_char buf '~';
-				Buffer.add_string buf "\x1b[0m"
+			if gutter > 0 then begin
+				if ui.show_line_numbers then begin
+					let num_width = max 1 (gutter - 1) in
+					let tilde_field =
+						Printf.sprintf "%*s" num_width "~"
+					in
+					Buffer.add_string buf "\x1b[90m";
+					Buffer.add_string buf tilde_field;
+					Buffer.add_string buf "\x1b[0m";
+					for _ = 1 to gutter - num_width do
+						Buffer.add_char buf ' '
+					done
+				end else
+					Buffer.add_string buf (String.make gutter ' ')
 			end else
 				Buffer.add_char buf '~';
 			incr screen_row;
@@ -320,12 +548,23 @@ let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 					clear_line buf;
 					if gutter > 0 then begin
 						if seg_idx = 0 then begin
-							let num_str =
-								Printf.sprintf "%*d "
-									(gutter - 1) (!doc_row + 1)
-							in
-							Buffer.add_string buf "\x1b[90m";
-							Buffer.add_string buf num_str;
+							let mark = gutter_mark_for state !doc_row in
+							if ui.show_line_numbers then begin
+								let num_str =
+									Printf.sprintf "%*d"
+										(gutter - 1) (!doc_row + 1)
+								in
+								Buffer.add_string buf "\x1b[90m";
+								Buffer.add_string buf num_str
+							end;
+							(match mark with
+							| `Added when ui.show_diff_markers ->
+								Buffer.add_string buf Theme.gutter_added;
+								Buffer.add_char buf '+'
+							| `Modified when ui.show_diff_markers ->
+								Buffer.add_string buf Theme.gutter_modified;
+								Buffer.add_char buf '~'
+							| _ -> Buffer.add_char buf ' ');
 							Buffer.add_string buf theme.reset
 						end else
 							Buffer.add_string buf (String.make gutter ' ')
@@ -336,7 +575,8 @@ let draw_content buf (state : State.t) (ui : Ui.t) (theme : Theme.t) =
 					if is_preview then
 						Buffer.add_string buf "\x1b[48;5;236m";
 					emit_segment buf line spans theme seg content_max
-						sel matches;
+						sel matches bracket_depth bracket_match
+						!doc_row;
 					if is_preview then
 						Buffer.add_string buf "\x1b[49m";
 					(if !doc_row = state.cursor.line then begin
@@ -374,9 +614,15 @@ let draw_status_bar buf (state : State.t) (ui : Ui.t) =
 	in
 	let dirty_marker = if state.dirty then "*" else "" in
 	let left = Printf.sprintf " %s%s " filename dirty_marker in
+	let n = Doc.line_count state.doc in
+	let position =
+		if n = 0 || state.cursor.line = 0 then "Top"
+		else if state.cursor.line >= n - 1 then "Bot"
+		else Printf.sprintf "%d%%" ((state.cursor.line + 1) * 100 / n)
+	in
 	let right =
-		Printf.sprintf " %d:%d "
-			(state.cursor.line + 1) (state.cursor.column + 1)
+		Printf.sprintf " %d:%d | %s "
+			(state.cursor.line + 1) (state.cursor.column + 1) position
 	in
 	Buffer.add_string buf left;
 	let padding =
@@ -400,7 +646,7 @@ let draw_message_bar buf (state : State.t) (ui : Ui.t) =
 	| Command_chord ->
 		let legend =
 			"s:save S:saveas q:quit f:find r:replace g:goto \
-			 t:theme w:wrap n:nums h:help :cmd"
+			 t:theme w:wrap n:nums D:diff h:help :cmd"
 		in
 		Buffer.add_string buf "\x1b[90m";
 		Buffer.add_string buf (Grapheme.truncate_to_width legend ui.cols);
@@ -544,6 +790,6 @@ let frame ?(theme = Theme.default) (state : State.t) (ui : Ui.t) =
 	| _ ->
 		(match cursor_screen with
 		| Some (r, c) -> move_cursor buf r c
-		| None -> move_cursor buf 0 0));
+		| None -> move_cursor buf 0 gutter));
 	show_cursor buf;
 	(ui, Buffer.contents buf)

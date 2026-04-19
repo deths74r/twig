@@ -1,5 +1,7 @@
 type t
 
+type mark = Unchanged | Added | Modified
+
 type measure = {
 	lines : int;
 	bytes : int;
@@ -19,11 +21,15 @@ val line_count : t -> int
 
 val get_line : int -> t -> string option
 
-val insert_line : int -> string -> t -> t
+val get_mark : int -> t -> mark
+
+val insert_line : ?marker:mark -> int -> string -> t -> t
 
 val delete_line : int -> t -> t
 
 val replace_line : int -> string -> t -> t
+
+val clear_markers : t -> t
 
 val insert_at : line:int -> column:int -> string -> t -> t
 

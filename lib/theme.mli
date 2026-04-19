@@ -22,4 +22,12 @@ val by_name : string -> t option
 
 val names : string list
 
+val bracket_colors : string array
+
+val gutter_added : string
+
+val gutter_modified : string
+
+val bracket_match : string
+
 val color_for : t -> Syntax.token -> string

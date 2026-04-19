@@ -28,6 +28,7 @@ type t =
 	| Open_file_cancel
 	| Toggle_wrap
 	| Toggle_line_numbers
+	| Toggle_diff_markers
 	| Enter_command_chord
 	| Enter_command_prompt of string
 	| Command_input of string
@@ -54,6 +55,6 @@ let apply_to_doc cmd doc =
 	| Search_commit | Search_cancel | Search_next
 	| Open_file_start | Open_file_append _ | Open_file_backspace
 	| Open_file_commit | Open_file_cancel
-	| Toggle_wrap | Toggle_line_numbers
+	| Toggle_wrap | Toggle_line_numbers | Toggle_diff_markers
 	| Enter_command_chord | Enter_command_prompt _ | Command_input _
 	| Command_backspace | Command_execute | Command_cancel -> doc
