@@ -206,12 +206,53 @@ let focus_move t ~rect dir =
 (* Resize                                                             *)
 (* ------------------------------------------------------------------ *)
 
-let clamp_ratio r =
-	if r < 0.05 then 0.05
-	else if r > 0.95 then 0.95
+let minimum_cells = 20
+
+(** Compute the rect of the subtree at [path] given [root_rect].
+    Returns None if the path is invalid. *)
+let rec subtree_rect tree rect path =
+	match tree, path with
+	| _, [] -> Some rect
+	| Split s, 0 :: rest ->
+			let r1, _ =
+				match s.dir with
+				| Horizontal -> Rect.split_h rect ~ratio:s.ratio
+				| Vertical -> Rect.split_v rect ~ratio:s.ratio
+			in
+			subtree_rect s.left r1 rest
+	| Split s, 1 :: rest ->
+			let _, r2 =
+				match s.dir with
+				| Horizontal -> Rect.split_h rect ~ratio:s.ratio
+				| Vertical -> Rect.split_v rect ~ratio:s.ratio
+			in
+			subtree_rect s.right r2 rest
+	| _ -> None
+
+(** Return the minimum/maximum ratio so that both sides of a split
+    with [dir] inside [parent_rect] get at least [minimum_cells]. *)
+let ratio_bounds (dir : dir) (parent_rect : Rect.t) =
+	let extent =
+		match dir with
+		| Horizontal -> parent_rect.rows
+		| Vertical -> parent_rect.cols
+	in
+	if extent <= 2 * minimum_cells then
+		(* Not enough space for two minimum-sized children.
+		   Fall back to the old ratio floor so we don't produce
+		   unusable 0/everything splits. *)
+		(0.05, 0.95)
+	else
+		let lo = float_of_int minimum_cells /. float_of_int extent in
+		let hi = 1.0 -. lo in
+		(lo, hi)
+
+let clamp_bounded lo hi r =
+	if r < lo then lo
+	else if r > hi then hi
 	else r
 
-let resize t ~delta =
+let resize t ~rect ~delta =
 	match List.rev t.focus_path with
 	| [] -> t  (* focus is at root; no ancestor split *)
 	| last :: rev_parent ->
@@ -224,7 +265,14 @@ let resize t ~delta =
 					   If focus is the right/bottom child (last = 1),
 					   growing it = decreasing ratio. *)
 					let sign = if last = 0 then 1.0 else -1.0 in
-					let new_ratio = clamp_ratio (s.ratio +. (delta *. sign)) in
+					let raw = s.ratio +. (delta *. sign) in
+					let parent_rect =
+						match subtree_rect t.root rect parent_path with
+						| Some r -> r
+						| None -> rect
+					in
+					let lo, hi = ratio_bounds s.dir parent_rect in
+					let new_ratio = clamp_bounded lo hi raw in
 					let new_parent = Split { s with ratio = new_ratio } in
 					let new_root =
 						replace_subtree t.root parent_path new_parent

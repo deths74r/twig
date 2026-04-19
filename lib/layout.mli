@@ -107,14 +107,23 @@ val focus_move :
 
 (** {1 Resize} *)
 
-val resize : t -> delta:float -> t
+val resize : t -> rect:Rect.t -> delta:float -> t
 (** Adjust the ratio of the nearest [Split] ancestor of the
     focused leaf. [delta] is signed and expresses the desired
     size change for the FOCUSED pane: positive grows it,
-    negative shrinks it. Ratio is clamped to [0.05, 0.95] so
-    a split never fully collapses. If the focused leaf is the
-    root (no ancestor split), the layout is returned
-    unchanged. *)
+    negative shrinks it.
+
+    [rect] is the whole-layout rectangle (same one passed to
+    [render]). Used to compute the split's actual pixel
+    dimensions so the clamp enforces a MINIMUM 20-COLUMN
+    (for vertical splits) or 20-ROW (for horizontal splits)
+    leaf size, not just a ratio floor. Per spec 18_tui.md §4,
+    §6: "leaves clamp to 20-column minimum."
+
+    A ratio that would make either side smaller than 20 cells
+    is rejected — the resize degrades to either the minimum
+    feasible or a no-op. If the focused leaf is the root (no
+    ancestor split), the layout is returned unchanged. *)
 
 val equalize : t -> t
 (** Set every [Split.ratio] in the tree to 0.5. Focus and tree

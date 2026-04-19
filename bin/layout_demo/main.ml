@@ -70,7 +70,7 @@ let focus_move dir s =
 	{ s with layout = Layout.focus_move s.layout ~rect:s.rect dir }
 
 let resize delta s =
-	{ s with layout = Layout.resize s.layout ~delta }
+	{ s with layout = Layout.resize s.layout ~rect:s.rect ~delta }
 
 let close s =
 	match Layout.close s.layout with

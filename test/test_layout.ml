@@ -252,11 +252,15 @@ let () =
 		| _ -> -1.0
 	in
 
+	(* 100 cols on canvas; 20-col minimum each side gives ratio
+	   bounds of [0.20, 0.80]. *)
+	let canvas100 = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:100 in
+
 	test "resize grows right (focused) pane by shrinking ratio" (fun () ->
 		let t = Layout.single Buf.empty () in
 		let t1 = Layout.split t Vertical Buf.empty () in
 		(* focus at [1] (right pane). delta +0.05 → right grows → ratio -0.05 *)
-		let t2 = Layout.resize t1 ~delta:0.05 in
+		let t2 = Layout.resize t1 ~rect:canvas100 ~delta:0.05 in
 		let r = split_ratio t2 in
 		assert (abs_float (r -. 0.45) < 1e-9));
 
@@ -264,30 +268,42 @@ let () =
 		let t = Layout.single Buf.empty () in
 		let t1 = Layout.split t Vertical Buf.empty () in
 		let t1_left = { t1 with focus_path = [ 0 ] } in
-		let t2 = Layout.resize t1_left ~delta:0.05 in
+		let t2 = Layout.resize t1_left ~rect:canvas100 ~delta:0.05 in
 		let r = split_ratio t2 in
 		assert (abs_float (r -. 0.55) < 1e-9));
 
-	test "resize clamps ratio at 0.05 (lower bound)" (fun () ->
+	test "resize clamps at 20-col minimum (lower)" (fun () ->
 		let t = Layout.single Buf.empty () in
 		let t1 = Layout.split t Vertical Buf.empty () in
 		let t1_left = { t1 with focus_path = [ 0 ] } in
-		(* delta -1.0 would push ratio to -0.5; clamp to 0.05 *)
-		let t2 = Layout.resize t1_left ~delta:(-1.0) in
+		(* delta -1.0 pushes ratio negative; clamp to 20/100=0.2 *)
+		let t2 = Layout.resize t1_left ~rect:canvas100 ~delta:(-1.0) in
+		let r = split_ratio t2 in
+		assert (abs_float (r -. 0.20) < 1e-9));
+
+	test "resize clamps at 20-col minimum (upper)" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.resize t1_left ~rect:canvas100 ~delta:1.0 in
+		let r = split_ratio t2 in
+		(* Upper clamp: 1 - 20/100 = 0.80 *)
+		assert (abs_float (r -. 0.80) < 1e-9));
+
+	test "resize falls back to [0.05, 0.95] when canvas too small" (fun () ->
+		(* 30 cols < 2 * 20 = too small for 20-col min both sides.
+		   ratio_bounds degrades to the ratio floor. *)
+		let small = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:30 in
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.resize t1_left ~rect:small ~delta:(-1.0) in
 		let r = split_ratio t2 in
 		assert (abs_float (r -. 0.05) < 1e-9));
 
-	test "resize clamps ratio at 0.95 (upper bound)" (fun () ->
-		let t = Layout.single Buf.empty () in
-		let t1 = Layout.split t Vertical Buf.empty () in
-		let t1_left = { t1 with focus_path = [ 0 ] } in
-		let t2 = Layout.resize t1_left ~delta:1.0 in
-		let r = split_ratio t2 in
-		assert (abs_float (r -. 0.95) < 1e-9));
-
 	test "resize on root leaf is a no-op" (fun () ->
 		let t = Layout.single Buf.empty () in
-		let t' = Layout.resize t ~delta:0.05 in
+		let t' = Layout.resize t ~rect:canvas100 ~delta:0.05 in
 		assert (count_leaves t' = 1);
 		assert (t'.focus_path = []));
 
@@ -302,7 +318,8 @@ let () =
 		let t = Layout.single Buf.empty () in
 		let t1 = Layout.split t Vertical Buf.empty () in
 		let t_skewed = Layout.resize
-			{ t1 with focus_path = [ 0 ] } ~delta:0.3
+			{ t1 with focus_path = [ 0 ] }
+			~rect:canvas100 ~delta:0.3
 		in
 		assert (split_ratio t_skewed <> 0.5);
 		let t_eq = Layout.equalize t_skewed in
@@ -313,10 +330,12 @@ let () =
 		let t1 = Layout.split t Horizontal Buf.empty () in
 		let t2 = Layout.split t1 Vertical Buf.empty () in
 		let t_skewed1 = Layout.resize
-			{ t2 with focus_path = [ 0 ] } ~delta:0.3
+			{ t2 with focus_path = [ 0 ] }
+			~rect:canvas100 ~delta:0.2
 		in
 		let t_skewed2 = Layout.resize
-			{ t_skewed1 with focus_path = [ 1; 0 ] } ~delta:0.2
+			{ t_skewed1 with focus_path = [ 1; 0 ] }
+			~rect:canvas100 ~delta:0.1
 		in
 		let t_eq = Layout.equalize t_skewed2 in
 		(* Root is H-split; its left child is a Leaf; right child is V-split. *)
