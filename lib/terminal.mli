@@ -11,7 +11,18 @@ val disable_kitty_keyboard : unit -> unit
 val get_size : unit -> int * int
 
 val write : string -> unit
-(** Low-level unclipped write at the current cursor position. *)
+(** Low-level unclipped write at the current cursor position.
+    Routes through the current [writer] (default: Unix.stdout). *)
+
+val with_writer : (string -> unit) -> (unit -> 'a) -> 'a
+(** [with_writer w f] runs [f ()] with [write] redirected to [w].
+    Restores the prior writer on exit (including on exception).
+    Primary use is test-time capture and off-terminal rendering. *)
+
+val with_capture : (unit -> 'a) -> string * 'a
+(** [with_capture f] runs [f ()] with all [write] output
+    accumulated into a fresh Buffer. Returns
+    [(captured_output, result_of_f)]. *)
 
 val install_resize_handler : unit -> unit
 

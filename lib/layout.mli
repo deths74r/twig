@@ -122,24 +122,22 @@ val equalize : t -> t
 
 (** {1 Render} *)
 
-val render : t -> rect:Rect.t -> theme:Theme.t -> string
-(** Render the layout to a string of ANSI escape sequences +
-    content. The caller writes this string to the terminal
-    (via [Terminal.write]); having [render] return a string
-    rather than side-effecting makes it directly testable via
-    snapshot comparison.
+val render : t -> rect:Rect.t -> theme:Theme.t -> unit
+(** Render the layout to the terminal via [Terminal.write_at]
+    under [Terminal.with_clip] (spec 18_tui.md §9). Each leaf
+    is drawn inside its computed sub-rect:
 
-    For each leaf:
-    - If [pane.title] is [Some], a title bar is drawn at the
-      top row using [theme.chrome.title_focused] (for the
-      focused pane) or [title_unfocused] (for others).
+    - Title bar (when [pane.title = Some]) at the top row,
+      styled via [theme.chrome.title_focused] (focused pane)
+      or [theme.chrome.title_unfocused].
     - Content rows show [pane.buf.doc] starting at
-      [pane.viewport.top_line]. Lines are truncated or
-      space-padded to fit the pane's width.
+      [pane.viewport.top_line], with each line run through
+      [Markdown.tokenize_line] so headings, emphasis, code,
+      lists, tables, etc. are styled per [theme.markdown].
+      Markdown state (fenced-code-open) threads across lines;
+      priming walks doc rows [0..top_line) so a viewport that
+      opens inside a code block picks up the right style.
+    - Content not covered by spans gets padded to full width
+      with spaces so prior frame output doesn't leak.
 
-    String clipping is byte-naive (one cell per byte). This is
-    correct for ASCII chrome and pre-wrapped span-rendered
-    content; multi-byte graphemes and ANSI escapes inside
-    buffer content are treated as literal bytes for width
-    purposes. Proper grapheme-aware rendering of buffer
-    content lands with the markdown tokenizer in Phase 4c. *)
+    Tests capture output via [Terminal.with_capture]. *)

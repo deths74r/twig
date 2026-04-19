@@ -252,20 +252,16 @@ let equalize t = { t with root = equalize_tree t.root }
 (* Render                                                             *)
 (* ------------------------------------------------------------------ *)
 
-(** CSI cursor-position escape. Row and col are 1-indexed. *)
-let csi_move buf ~row ~col =
-	Buffer.add_string buf
-		(Printf.sprintf "\x1b[%d;%dH" (row + 1) (col + 1))
-
-(** Truncate [s] to [n] bytes, or right-pad with spaces if [s] is
-    shorter. Byte-naive: fine for ASCII chrome. *)
-let fit_to_width s n =
+(** Right-truncate [s] to fit [n] bytes. Byte-naive (the §18:9
+    scope carve — ASCII chrome and pre-wrapped span content
+    only; grapheme-aware width is future work). *)
+let truncate_to s n =
 	let len = String.length s in
 	if n <= 0 then ""
-	else if len >= n then String.sub s 0 n
-	else s ^ String.make (n - len) ' '
+	else if len <= n then s
+	else String.sub s 0 n
 
-let render_title buf (pane : pane) (rect : Rect.t) ~focused ~theme =
+let render_title (pane : pane) (rect : Rect.t) ~focused ~theme =
 	match pane.title with
 	| None -> ()
 	| Some title ->
@@ -273,12 +269,49 @@ let render_title buf (pane : pane) (rect : Rect.t) ~focused ~theme =
 				if focused then theme.Theme.chrome.title_focused
 				else theme.chrome.title_unfocused
 			in
-			csi_move buf ~row:rect.row ~col:rect.col;
-			Buffer.add_string buf (Theme.style_to_ansi style);
-			Buffer.add_string buf (fit_to_width title rect.cols);
-			Buffer.add_string buf Theme.reset
+			let text = truncate_to title rect.cols in
+			let padded =
+				text
+				^ String.make (max 0 (rect.cols - String.length text)) ' '
+			in
+			Terminal.move ~row:rect.row ~col:rect.col;
+			let ansi = Theme.style_to_ansi style in
+			if ansi <> "" then Terminal.write ansi;
+			Terminal.write padded;
+			if ansi <> "" then Terminal.write Theme.reset
 
-let render_content buf (pane : pane) (rect : Rect.t) =
+(** Emit one source line at [target_row] starting at [target_col],
+    clipped to [max_cols] total bytes. Spans drive per-range
+    styling. Remaining width past the last span is padded with
+    plain spaces so prior frame content doesn't leak. *)
+let render_line ~target_row ~target_col ~max_cols ~line
+    ~(spans : Markdown.span list) =
+	Terminal.move ~row:target_row ~col:target_col;
+	let remaining = ref max_cols in
+	List.iter
+		(fun (span : Markdown.span) ->
+			if !remaining > 0 then begin
+				let span_len = span.stop - span.start in
+				let emit_len =
+					if span_len < !remaining then span_len else !remaining
+				in
+				if emit_len > 0 then begin
+					let chunk = String.sub line span.start emit_len in
+					let ansi = Theme.style_to_ansi span.style in
+					if ansi <> "" then begin
+						Terminal.write ansi;
+						Terminal.write chunk;
+						Terminal.write Theme.reset
+					end else
+						Terminal.write chunk;
+					remaining := !remaining - emit_len
+				end
+			end)
+		spans;
+	if !remaining > 0 then
+		Terminal.write (String.make !remaining ' ')
+
+let render_content (pane : pane) (rect : Rect.t) ~theme =
 	let title_rows = if pane.title <> None then 1 else 0 in
 	let content_start = rect.row + title_rows in
 	let content_rows = rect.rows - title_rows in
@@ -286,27 +319,44 @@ let render_content buf (pane : pane) (rect : Rect.t) =
 	else begin
 		let doc = pane.buf.Buf.doc in
 		let top = pane.viewport.Viewport.top_line in
+		let md_theme = theme.Theme.markdown in
+		(* Prime Markdown state through lines above the viewport so
+		   cross-line state (fenced-code-open) is correct if the
+		   viewport opens inside a block. *)
+		let state = ref Markdown.init in
+		for doc_row = 0 to top - 1 do
+			let line =
+				Option.value (Doc.get_line doc_row doc) ~default:""
+			in
+			let _, s =
+				Markdown.tokenize_line ~state:!state ~line ~theme:md_theme
+			in
+			state := s
+		done;
 		for i = 0 to content_rows - 1 do
 			let doc_row = top + i in
 			let line =
-				match Doc.get_line doc_row doc with
-				| Some s -> s
-				| None -> ""
+				Option.value (Doc.get_line doc_row doc) ~default:""
 			in
-			csi_move buf ~row:(content_start + i) ~col:rect.col;
-			Buffer.add_string buf (fit_to_width line rect.cols)
+			let spans, s =
+				Markdown.tokenize_line ~state:!state ~line ~theme:md_theme
+			in
+			state := s;
+			render_line
+				~target_row:(content_start + i)
+				~target_col:rect.col
+				~max_cols:rect.cols
+				~line ~spans
 		done
 	end
 
 let render t ~rect ~theme =
-	let buf = Buffer.create 512 in
 	let leaves = leaf_rects t.root rect in
 	List.iter
 		(fun (path, pane, r) ->
-			if not (Rect.is_empty r) then begin
-				let focused = path = t.focus_path in
-				render_title buf pane r ~focused ~theme;
-				render_content buf pane r
-			end)
-		leaves;
-	Buffer.contents buf
+			if not (Rect.is_empty r) then
+				Terminal.with_clip r (fun () ->
+					let focused = path = t.focus_path in
+					render_title pane r ~focused ~theme;
+					render_content pane r ~theme))
+		leaves

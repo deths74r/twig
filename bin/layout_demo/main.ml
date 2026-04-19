@@ -107,11 +107,13 @@ let on_input (event : Input.event) (s : state) : state =
 	| _ -> s
 
 let render (s : state) : string =
-	(* Clear screen + home cursor before drawing the layout so
-	   we start from a known state each frame. Layout.render
-	   emits its own CSI move escapes per pane. *)
-	"\x1b[2J\x1b[H"
-	^ Layout.render s.layout ~rect:s.rect ~theme:Theme.default
+	(* Clear screen + home cursor, then capture Layout.render's
+	   side-effecting output to a buffer so Twig.Loop can emit
+	   it as a single terminal write. *)
+	let rendered, () = Terminal.with_capture (fun () ->
+		Layout.render s.layout ~rect:s.rect ~theme:Theme.default)
+	in
+	"\x1b[2J\x1b[H" ^ rendered
 
 let () =
 	let init = initial_state () in

@@ -45,13 +45,27 @@ let disable_kitty_keyboard () =
 	let _ = Unix.write_substring Unix.stdout s 0 (String.length s) in
 	()
 
-let write s =
+let default_writer : string -> unit = fun s ->
 	let len = String.length s in
 	let written = ref 0 in
 	while !written < len do
 		let n = Unix.write_substring Unix.stdout s !written (len - !written) in
 		written := !written + n
 	done
+
+let writer : (string -> unit) ref = ref default_writer
+
+let write s = !writer s
+
+let with_writer w f =
+	let prior = !writer in
+	writer := w;
+	Fun.protect ~finally:(fun () -> writer := prior) f
+
+let with_capture f =
+	let buf = Buffer.create 256 in
+	let result = with_writer (Buffer.add_string buf) f in
+	(Buffer.contents buf, result)
 
 (* SIGWINCH is signal 28 on Linux and BSD. OCaml's Sys module doesn't
    expose it by name, so the number is hardcoded. *)

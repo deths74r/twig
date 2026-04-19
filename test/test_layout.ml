@@ -350,7 +350,8 @@ let () =
 	test "render single leaf no title emits only content" (fun () ->
 		let t = Layout.single Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* No title → no style-ANSI codes for chrome *)
 		assert (not (contains out "title"));
 		(* Expect 3 CSI moves (one per content row) *)
@@ -363,7 +364,8 @@ let () =
 	test "render leaf with title includes title text" (fun () ->
 		let t = Layout.single ~title:"hello" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (contains out "hello"));
 
 	test "render truncates long title to width" (fun () ->
@@ -372,14 +374,16 @@ let () =
 			Buf.empty ()
 		in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Title truncated to 10 bytes, so "this is a" prefix still there *)
 		assert (contains out "this is a "));
 
 	test "render pads short title to width" (fun () ->
 		let t = Layout.single ~title:"ab" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:10 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Title "ab" padded to 10: "ab        " (8 spaces) *)
 		assert (contains out "ab        "));
 
@@ -393,7 +397,8 @@ let () =
 		let t = { t with focus_path = [ 1 ] } in
 		let t = Layout.split t Horizontal ~title:"BR" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:80 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (contains out "TL");
 		assert (contains out "TR");
 		assert (contains out "BL");
@@ -403,7 +408,8 @@ let () =
 		let t = Layout.single ~title:"A" Buf.empty () in
 		let t = Layout.split t Vertical ~title:"B" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* Focused style for default theme includes bold + bg24 *)
 		let focused_ansi =
 			Theme.style_to_ansi Theme.default.chrome.title_focused
@@ -430,14 +436,113 @@ let () =
 			| None -> t
 		in
 		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		(* top_line=2 means first visible row is line2 *)
 		assert (contains out "line2"));
 
 	test "render empty-rect leaf produces no output" (fun () ->
 		let t = Layout.single ~title:"X" Buf.empty () in
 		let r = Rect.make ~row:0 ~col:0 ~rows:0 ~cols:0 in
-		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
 		assert (out = ""));
+
+	(* ------- markdown-styled content rendering (spec §9) ------- *)
+
+	let render_capture t r =
+		let out, () = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme:Theme.default) in
+		out
+	in
+
+	test "render emits heading style for # line" (fun () ->
+		let doc = Doc.of_string "# Hello" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:20 in
+		let out = render_capture t r in
+		let heading_ansi =
+			Theme.style_to_ansi Theme.default.markdown.heading.(0)
+		in
+		assert (heading_ansi <> "");
+		assert (contains out heading_ansi));
+
+	test "render emits bold style for **...**" (fun () ->
+		let doc = Doc.of_string "this **word** here" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:40 in
+		let out = render_capture t r in
+		let bold_ansi =
+			Theme.style_to_ansi Theme.default.markdown.bold
+		in
+		assert (bold_ansi <> "");
+		assert (contains out bold_ansi));
+
+	test "render styles inline code" (fun () ->
+		let doc = Doc.of_string "use `fn` please" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:40 in
+		let out = render_capture t r in
+		let code_ansi =
+			Theme.style_to_ansi Theme.default.markdown.inline_code
+		in
+		assert (code_ansi <> "");
+		assert (contains out code_ansi));
+
+	test "render carries fenced-code state across lines" (fun () ->
+		(* Line in middle of fenced block should be styled as code
+		   even though the line itself has no ``` marker. *)
+		let doc = Doc.of_string "```\nlet x = 1\n```\nafter" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:4 ~cols:40 in
+		let out = render_capture t r in
+		let code_block_ansi =
+			Theme.style_to_ansi Theme.default.markdown.code_block
+		in
+		assert (code_block_ansi <> "");
+		(* The middle line should be emitted inside code_block style *)
+		assert (contains out code_block_ansi));
+
+	test "render primes fenced state from doc lines above viewport" (fun () ->
+		(* Viewport starts at line 2 (inside a fence).  Without the
+		   priming loop, tokenizer would treat "let x = 1" as a plain
+		   markdown line. With priming, it gets code_block style. *)
+		let doc = Doc.of_string "```ocaml\nlet a = 1\nlet b = 2\nlet c = 3" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let t =
+			match Layout.find_leaf t ~path:[] with
+			| Some pane ->
+					let p = {
+						pane with
+						viewport = { pane.viewport with top_line = 2 }
+					} in
+					Layout.replace_leaf t ~path:[] p
+			| None -> t
+		in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:40 in
+		let out = render_capture t r in
+		let code_block_ansi =
+			Theme.style_to_ansi Theme.default.markdown.code_block
+		in
+		assert (contains out code_block_ansi));
+
+	test "render styles table pipes" (fun () ->
+		let doc = Doc.of_string "| a | b |" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:20 in
+		let out = render_capture t r in
+		let border_ansi =
+			Theme.style_to_ansi Theme.default.markdown.table_border
+		in
+		assert (border_ansi <> "");
+		assert (contains out border_ansi));
+
+	test "render pads short line to full width with spaces" (fun () ->
+		let doc = Doc.of_string "hi" in
+		let t = Layout.single (Buf.of_doc doc) () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:1 ~cols:10 in
+		let out = render_capture t r in
+		(* "hi" + 8 spaces should appear somewhere in the output *)
+		assert (contains out "hi        "));
 
 	print_endline "test_layout done"
