@@ -1,0 +1,161 @@
+# twig default theme.
+#
+# Color values are strings. Accepted forms:
+#   - "default" or "-" for terminal default
+#   - 0..15 for standard ANSI (0-7 normal, 8-15 bright)
+#   - 16..255 for 256-color palette
+#   - "#rrggbb" for 24-bit RGB
+#   - named colors: black, red, green, yellow, blue, magenta,
+#     cyan, white, and their "bright_*" variants
+#
+# bold / dim / italic / underline / strikethrough are booleans.
+# Omitted fields fall back to the engine default theme.
+
+# --- chrome ---
+
+[chrome.status]
+
+[chrome.title_focused]
+fg = "231"
+bg = "24"
+bold = true
+
+[chrome.title_unfocused]
+fg = "245"
+
+[chrome.border_focused]
+fg = "24"
+
+[chrome.border_unfocused]
+fg = "240"
+
+[chrome.tab_active]
+fg = "231"
+bg = "24"
+bold = true
+
+[chrome.tab_inactive]
+fg = "245"
+
+[chrome.warning]
+fg = "yellow"
+
+[chrome.error]
+fg = "red"
+bold = true
+
+# --- markdown ---
+
+[markdown.heading1]
+fg = "33"
+bold = true
+
+[markdown.heading2]
+fg = "45"
+bold = true
+
+[markdown.heading3]
+fg = "75"
+bold = true
+
+[markdown.heading4]
+fg = "75"
+
+[markdown.heading5]
+fg = "111"
+
+[markdown.heading6]
+fg = "147"
+
+[markdown.code_block]
+fg = "244"
+
+[markdown.inline_code]
+fg = "244"
+
+[markdown.link]
+fg = "75"
+underline = true
+
+[markdown.bold]
+bold = true
+
+[markdown.italic]
+italic = true
+
+[markdown.strikethrough]
+strikethrough = true
+
+[markdown.blockquote]
+fg = "245"
+dim = true
+
+[markdown.list_marker]
+fg = "75"
+
+[markdown.hr]
+fg = "240"
+dim = true
+
+[markdown.table_border]
+fg = "240"
+dim = true
+
+[markdown.table_header]
+bold = true
+
+# --- syntax ---
+
+[syntax.text]
+
+[syntax.keyword]
+fg = "magenta"
+bold = true
+
+[syntax.type_kw]
+fg = "cyan"
+
+[syntax.string_lit]
+fg = "green"
+
+[syntax.char_lit]
+fg = "green"
+
+[syntax.number]
+fg = "yellow"
+
+[syntax.comment]
+fg = "bright_black"
+
+[syntax.preproc]
+fg = "red"
+
+[syntax.selection]
+fg = "231"
+bg = "24"
+
+[syntax.match_highlight]
+fg = "16"
+bg = "226"
+
+[syntax.bracket_color1]
+fg = "178"
+
+[syntax.bracket_color2]
+fg = "141"
+
+[syntax.bracket_color3]
+fg = "73"
+
+[syntax.bracket_color4]
+fg = "209"
+
+[syntax.bracket_match]
+bg = "238"
+bold = true
+
+[syntax.gutter_added]
+fg = "114"
+
+[syntax.gutter_modified]
+fg = "179"

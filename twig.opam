@@ -8,4 +8,5 @@ depends: [
   "uutf"
   "uucp"
   "uuseg"
+  "otoml"
 ]
