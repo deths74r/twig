@@ -367,10 +367,10 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 	else begin
 		let doc = pane.buf.Buf.doc in
 		let top = pane.viewport.Viewport.top_line in
+		let total_lines = Doc.line_count doc in
 		let md_theme = theme.Theme.markdown in
-		(* Prime Markdown state through lines above the viewport so
-		   cross-line state (fenced-code-open) is correct if the
-		   viewport opens inside a block. *)
+		let wrap_width = rect.cols in
+		(* Prime Markdown state through lines above the viewport *)
 		let state = ref Markdown.init in
 		for doc_row = 0 to top - 1 do
 			let line =
@@ -381,20 +381,67 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 			in
 			state := s
 		done;
-		for i = 0 to content_rows - 1 do
-			let doc_row = top + i in
+		(* Render doc lines with soft wrapping. Each doc line
+		   may produce multiple screen rows via wrap_line. *)
+		let screen_row = ref 0 in
+		let doc_row = ref top in
+		while !screen_row < content_rows && !doc_row < total_lines do
 			let line =
-				Option.value (Doc.get_line doc_row doc) ~default:""
+				Option.value (Doc.get_line !doc_row doc) ~default:""
 			in
 			let spans, s =
 				Markdown.tokenize_line ~state:!state ~line ~theme:md_theme
 			in
 			state := s;
-			render_line
-				~target_row:(content_start + i)
-				~target_col:rect.col
-				~max_cols:rect.cols
-				~line ~spans
+			let segments =
+				if pane.viewport.Viewport.wrap then
+					Viewport.wrap_line line wrap_width
+				else
+					[{ Viewport.start_gi = 0;
+					   end_gi = Grapheme.count line }]
+			in
+			List.iter
+				(fun (seg : Viewport.segment) ->
+					if !screen_row < content_rows then begin
+						(* Extract the substring for this segment *)
+						let seg_start_byte =
+							Grapheme.byte_of_index line seg.start_gi
+						in
+						let seg_end_byte =
+							Grapheme.byte_of_index line seg.end_gi
+						in
+						let seg_text = String.sub line seg_start_byte
+							(seg_end_byte - seg_start_byte)
+						in
+						(* Filter spans to this segment's byte range *)
+						let seg_spans = List.filter_map
+							(fun (span : Markdown.span) ->
+								if span.stop <= seg_start_byte
+								   || span.start >= seg_end_byte then None
+								else
+									let s = max span.start seg_start_byte in
+									let e = min span.stop seg_end_byte in
+									if s >= e then None
+									else Some { span with
+										start = s - seg_start_byte;
+										stop = e - seg_start_byte })
+							spans
+						in
+						render_line
+							~target_row:(content_start + !screen_row)
+							~target_col:rect.col
+							~max_cols:rect.cols
+							~line:seg_text ~spans:seg_spans;
+						incr screen_row
+					end)
+				segments;
+			incr doc_row
+		done;
+		(* Clear remaining screen rows *)
+		for i = !screen_row to content_rows - 1 do
+			Terminal.move
+				~row:(content_start + i) ~col:rect.col;
+			Terminal.write (String.make rect.cols ' ')
 		done
 	end
 
