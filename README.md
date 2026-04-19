@@ -4,11 +4,11 @@ Terminal buffer engine in OCaml. An embeddable library for building
 TUI applications: grapheme-aware text storage, splittable pane
 layout, markdown rendering, input decoding, and a minimal event
 loop. The editor that originally lived here has been split out to
-[twig-edit](https://github.com/fincept/twig-edit).
+[twig-edit](https://github.com/deths74r/twig-edit).
 
 Downstream consumers:
-- [twig-edit](https://github.com/fincept/twig-edit) — the editor.
-- [lmi](https://github.com/fincept/lmi) — persistent-memory
+- [twig-edit](https://github.com/deths74r/twig-edit) — the editor.
+- [lmi](https://github.com/deths74r/lmi) — persistent-memory
   substrate for LLMs; uses twig for its TUI panes, layout, and
   streaming markdown rendering.
 
