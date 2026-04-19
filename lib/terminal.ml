@@ -66,3 +66,78 @@ let install_resize_handler () =
 let resize_flag () = !resize_received
 
 let clear_resize_flag () = resize_received := false
+
+(* ------------------------------------------------------------------ *)
+(* Region-scoped positional writes                                    *)
+(* ------------------------------------------------------------------ *)
+
+let current_clip : Rect.t option ref = ref None
+
+let move ~row ~col =
+	(* CSI uses 1-based coordinates *)
+	let s = Printf.sprintf "\x1b[%d;%dH" (row + 1) (col + 1) in
+	write s
+
+let clip_write ~clip ~row ~col s =
+	if Rect.is_empty clip then None
+	else if row < clip.row || row >= clip.row + clip.rows then None
+	else
+		let len = String.length s in
+		let clip_end_col = clip.col + clip.cols in
+		if col >= clip_end_col then None
+		else if col + len <= clip.col then None
+		else begin
+			(* Left truncate *)
+			let start_offset =
+				if col < clip.col then clip.col - col else 0
+			in
+			let effective_col = col + start_offset in
+			let remaining = len - start_offset in
+			(* Right truncate *)
+			let max_len = clip_end_col - effective_col in
+			let final_len = if remaining > max_len then max_len else remaining in
+			if final_len <= 0 then None
+			else
+				Some (row, effective_col,
+				      String.sub s start_offset final_len)
+		end
+
+let write_at ~row ~col s =
+	match !current_clip with
+	| None ->
+			move ~row ~col;
+			write s
+	| Some clip ->
+			begin match clip_write ~clip ~row ~col s with
+			| None -> ()
+			| Some (r, c, s') ->
+					move ~row:r ~col:c;
+					write s'
+			end
+
+let clear_rect (r : Rect.t) =
+	if Rect.is_empty r then ()
+	else
+		let effective =
+			match !current_clip with
+			| None -> Some r
+			| Some c -> Rect.intersect r c
+		in
+		match effective with
+		| None -> ()
+		| Some r ->
+				let blank = String.make r.cols ' ' in
+				for i = 0 to r.rows - 1 do
+					move ~row:(r.row + i) ~col:r.col;
+					write blank
+				done
+
+let with_clip r f =
+	let prior = !current_clip in
+	let effective =
+		match prior with
+		| None -> Some r
+		| Some c -> Rect.intersect r c
+	in
+	current_clip := effective;
+	Fun.protect ~finally:(fun () -> current_clip := prior) f
