@@ -25,7 +25,6 @@ type chrome = {
 	title_focused     : style;
 	title_unfocused   : style;
 	border_focused    : style;
-	border_unfocused  : style;
 	tab_active        : style;
 	tab_inactive      : style;
 	warning           : style;
@@ -204,7 +203,6 @@ let default_chrome = {
 	title_focused    = s ~fg:(Ansi256 231) ~bg:(Ansi256 24) ~bold:true ();
 	title_unfocused  = s ~fg:(Ansi256 245) ();
 	border_focused   = s ~fg:(Ansi256 24) ();
-	border_unfocused = s ~fg:(Ansi256 240) ();
 	tab_active       = s ~fg:(Ansi256 231) ~bg:(Ansi256 24) ~bold:true ();
 	tab_inactive     = s ~fg:(Ansi256 245) ();
 	warning          = s ~fg:(Ansi 3) ();
@@ -340,22 +338,22 @@ let parse_chrome root =
 	let fb = default_chrome in
 	let labels =
 		[ "status"; "title_focused"; "title_unfocused";
-		  "border_focused"; "border_unfocused";
+		  "border_focused";
 		  "tab_active"; "tab_inactive";
 		  "warning"; "error" ]
 	in
 	let fallbacks =
 		[ fb.status; fb.title_focused; fb.title_unfocused;
-		  fb.border_focused; fb.border_unfocused;
+		  fb.border_focused;
 		  fb.tab_active; fb.tab_inactive;
 		  fb.warning; fb.error ]
 	in
 	let* xs = parse_labelled root [ "chrome" ] ~labels ~fallbacks in
 	match xs with
-	| [ status; tf; tu; bf; bu; ta; ti; w; e ] ->
+	| [ status; tf; tu; bf; ta; ti; w; e ] ->
 			Ok {
 				status = status; title_focused = tf; title_unfocused = tu;
-				border_focused = bf; border_unfocused = bu;
+				border_focused = bf;
 				tab_active = ta; tab_inactive = ti;
 				warning = w; error = e;
 			}

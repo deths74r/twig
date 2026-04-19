@@ -45,7 +45,6 @@ type chrome = {
 	title_focused     : style;
 	title_unfocused   : style;
 	border_focused    : style;
-	border_unfocused  : style;
 	tab_active        : style;
 	tab_inactive      : style;
 	warning           : style;
