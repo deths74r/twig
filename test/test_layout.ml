@@ -193,4 +193,143 @@ let () =
 		(* original tree preserved *)
 		assert (count_leaves t' = 1));
 
+	(* ------- focus_move ------- *)
+
+	let canvas = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:80 in
+
+	test "focus_move left from right pane of V-split" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		(* focus starts on right (new) pane; move left *)
+		let t2 = Layout.focus_move t1 ~rect:canvas `Left in
+		assert (t2.focus_path = [ 0 ]));
+
+	test "focus_move left from left pane is no-op" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.focus_move t1_left ~rect:canvas `Left in
+		assert (t2.focus_path = [ 0 ]));
+
+	test "focus_move right from right pane is no-op" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t2 = Layout.focus_move t1 ~rect:canvas `Right in
+		assert (t2.focus_path = [ 1 ]));
+
+	test "focus_move up on V-split is no-op (no vertical neighbor)" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t2 = Layout.focus_move t1 ~rect:canvas `Up in
+		assert (t2.focus_path = t1.focus_path));
+
+	test "focus_move down on H-split moves to bottom" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Horizontal Buf.empty () in
+		(* new leaf at [1] is the BOTTOM half. Move focus back up first. *)
+		let t1_top = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.focus_move t1_top ~rect:canvas `Down in
+		assert (t2.focus_path = [ 1 ]));
+
+	test "focus_move across nested H-and-V splits" (fun () ->
+		(* Construct: V split at root, right side is H split.
+		   Tree: [0] = left leaf (full height),
+		         [1;0] = top-right leaf, [1;1] = bottom-right leaf *)
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t2 = Layout.split t1 Horizontal Buf.empty () in
+		(* focus at [1;1] — bottom-right *)
+		assert (t2.focus_path = [ 1; 1 ]);
+		(* Move left: should go to the left pane [0] *)
+		let t3 = Layout.focus_move t2 ~rect:canvas `Left in
+		assert (t3.focus_path = [ 0 ]));
+
+	(* ------- resize ------- *)
+
+	let split_ratio t =
+		match t.Layout.root with
+		| Split s -> s.ratio
+		| _ -> -1.0
+	in
+
+	test "resize grows right (focused) pane by shrinking ratio" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		(* focus at [1] (right pane). delta +0.05 → right grows → ratio -0.05 *)
+		let t2 = Layout.resize t1 ~delta:0.05 in
+		let r = split_ratio t2 in
+		assert (abs_float (r -. 0.45) < 1e-9));
+
+	test "resize grows left (focused) pane by increasing ratio" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.resize t1_left ~delta:0.05 in
+		let r = split_ratio t2 in
+		assert (abs_float (r -. 0.55) < 1e-9));
+
+	test "resize clamps ratio at 0.05 (lower bound)" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		(* delta -1.0 would push ratio to -0.5; clamp to 0.05 *)
+		let t2 = Layout.resize t1_left ~delta:(-1.0) in
+		let r = split_ratio t2 in
+		assert (abs_float (r -. 0.05) < 1e-9));
+
+	test "resize clamps ratio at 0.95 (upper bound)" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t1_left = { t1 with focus_path = [ 0 ] } in
+		let t2 = Layout.resize t1_left ~delta:1.0 in
+		let r = split_ratio t2 in
+		assert (abs_float (r -. 0.95) < 1e-9));
+
+	test "resize on root leaf is a no-op" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t' = Layout.resize t ~delta:0.05 in
+		assert (count_leaves t' = 1);
+		assert (t'.focus_path = []));
+
+	(* ------- equalize ------- *)
+
+	test "equalize single leaf is no-op" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t' = Layout.equalize t in
+		assert (count_leaves t' = 1));
+
+	test "equalize sets root split ratio to 0.5" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t_skewed = Layout.resize
+			{ t1 with focus_path = [ 0 ] } ~delta:0.3
+		in
+		assert (split_ratio t_skewed <> 0.5);
+		let t_eq = Layout.equalize t_skewed in
+		assert (split_ratio t_eq = 0.5));
+
+	test "equalize is recursive" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Horizontal Buf.empty () in
+		let t2 = Layout.split t1 Vertical Buf.empty () in
+		let t_skewed1 = Layout.resize
+			{ t2 with focus_path = [ 0 ] } ~delta:0.3
+		in
+		let t_skewed2 = Layout.resize
+			{ t_skewed1 with focus_path = [ 1; 0 ] } ~delta:0.2
+		in
+		let t_eq = Layout.equalize t_skewed2 in
+		(* Root is H-split; its left child is a Leaf; right child is V-split. *)
+		match t_eq.root with
+		| Split { ratio = r1; right = Split { ratio = r2; _ }; _ } ->
+				assert (r1 = 0.5);
+				assert (r2 = 0.5)
+		| _ -> failwith "unexpected tree shape");
+
+	test "equalize preserves focus" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let t1 = Layout.split t Vertical Buf.empty () in
+		let t' = Layout.equalize t1 in
+		assert (t'.focus_path = t1.focus_path));
+
 	print_endline "test_layout done"

@@ -131,3 +131,119 @@ let replace_leaf t ~path pane =
 	| _ -> t
 
 let focus t = find_leaf t ~path:t.focus_path
+
+(* ------------------------------------------------------------------ *)
+(* Geometry                                                           *)
+(* ------------------------------------------------------------------ *)
+
+(** Compute the rectangle for every leaf under [tree] given a
+    parent [rect]. Accumulated in right-to-left order; caller
+    doesn't rely on the order. *)
+let leaf_rects tree root_rect =
+	let rec go tree rect rev_path acc =
+		match tree with
+		| Leaf pane ->
+				(List.rev rev_path, pane, rect) :: acc
+		| Split s ->
+				let r1, r2 =
+					match s.dir with
+					| Horizontal -> Rect.split_h rect ~ratio:s.ratio
+					| Vertical   -> Rect.split_v rect ~ratio:s.ratio
+				in
+				let acc = go s.left r1 (0 :: rev_path) acc in
+				go s.right r2 (1 :: rev_path) acc
+	in
+	go tree root_rect [] []
+
+(* ------------------------------------------------------------------ *)
+(* Focus                                                              *)
+(* ------------------------------------------------------------------ *)
+
+let focus_move t ~rect dir =
+	let leaves = leaf_rects t.root rect in
+	let focused =
+		List.find_opt (fun (p, _, _) -> p = t.focus_path) leaves
+	in
+	match focused with
+	| None -> t
+	| Some (_, _, fr) ->
+			let fr_end_col = fr.Rect.col + fr.cols in
+			let fr_end_row = fr.Rect.row + fr.rows in
+			let fc_row = fr.row + (fr.rows / 2) in
+			let fc_col = fr.col + (fr.cols / 2) in
+			let in_direction (r : Rect.t) =
+				match dir with
+				| `Left  -> r.col + r.cols <= fr.col
+				| `Right -> r.col >= fr_end_col
+				| `Up    -> r.row + r.rows <= fr.row
+				| `Down  -> r.row >= fr_end_row
+			in
+			let dist (r : Rect.t) =
+				let rc_row = r.row + (r.rows / 2) in
+				let rc_col = r.col + (r.cols / 2) in
+				abs (rc_row - fc_row) + abs (rc_col - fc_col)
+			in
+			let candidates =
+				List.filter
+					(fun (p, _, r) -> p <> t.focus_path && in_direction r)
+					leaves
+			in
+			match candidates with
+			| [] -> t
+			| first :: rest ->
+					let best =
+						List.fold_left
+							(fun best c ->
+								let (_, _, br) = best in
+								let (_, _, cr) = c in
+								if dist cr < dist br then c else best)
+							first rest
+					in
+					let (p, _, _) = best in
+					{ t with focus_path = p }
+
+(* ------------------------------------------------------------------ *)
+(* Resize                                                             *)
+(* ------------------------------------------------------------------ *)
+
+let clamp_ratio r =
+	if r < 0.05 then 0.05
+	else if r > 0.95 then 0.95
+	else r
+
+let resize t ~delta =
+	match List.rev t.focus_path with
+	| [] -> t  (* focus is at root; no ancestor split *)
+	| last :: rev_parent ->
+			let parent_path = List.rev rev_parent in
+			match find_subtree_opt t.root parent_path with
+			| Some (Split s) ->
+					(* delta is the desired signed change to the focused
+					   pane's size. If focus is the left/top child
+					   (last = 0), growing it = increasing ratio.
+					   If focus is the right/bottom child (last = 1),
+					   growing it = decreasing ratio. *)
+					let sign = if last = 0 then 1.0 else -1.0 in
+					let new_ratio = clamp_ratio (s.ratio +. (delta *. sign)) in
+					let new_parent = Split { s with ratio = new_ratio } in
+					let new_root =
+						replace_subtree t.root parent_path new_parent
+					in
+					{ t with root = new_root }
+			| _ -> t
+
+(* ------------------------------------------------------------------ *)
+(* Equalize                                                           *)
+(* ------------------------------------------------------------------ *)
+
+let rec equalize_tree = function
+	| Leaf _ as l -> l
+	| Split s ->
+			Split {
+				s with
+				ratio = 0.5;
+				left  = equalize_tree s.left;
+				right = equalize_tree s.right;
+			}
+
+let equalize t = { t with root = equalize_tree t.root }

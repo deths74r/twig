@@ -79,9 +79,43 @@ val replace_leaf : t -> path:path -> pane -> t
     [pane]. Tree structure and focus are preserved. If [path]
     does not address a leaf, the layout is returned unchanged. *)
 
-(** {1 Invariants} *)
+(** {1 Focus} *)
 
 val focus : t -> pane option
 (** The currently-focused pane, or [None] if the layout is
     somehow in an invalid state (should not happen for layouts
     constructed via this module's operations). *)
+
+val focus_move :
+	t ->
+	rect:Rect.t ->
+	[ `Left | `Right | `Up | `Down ] ->
+	t
+(** Move focus to the nearest leaf in the given direction.
+    [rect] is the rectangle covering the whole layout — the
+    caller provides it so focus math can be geometric rather
+    than structural (Ctrl-W in vim is structural, which loses
+    on non-trivial trees; this is closer to i3's directional
+    focus).
+
+    "Nearest" = candidate whose center is closest to the
+    focused pane's center by Manhattan distance. A candidate
+    must lie entirely in the requested direction from the
+    focused pane's bounding edges.
+
+    No candidate in that direction → returned unchanged. *)
+
+(** {1 Resize} *)
+
+val resize : t -> delta:float -> t
+(** Adjust the ratio of the nearest [Split] ancestor of the
+    focused leaf. [delta] is signed and expresses the desired
+    size change for the FOCUSED pane: positive grows it,
+    negative shrinks it. Ratio is clamped to [0.05, 0.95] so
+    a split never fully collapses. If the focused leaf is the
+    root (no ancestor split), the layout is returned
+    unchanged. *)
+
+val equalize : t -> t
+(** Set every [Split.ratio] in the tree to 0.5. Focus and tree
+    structure are preserved. *)
