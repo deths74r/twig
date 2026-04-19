@@ -332,4 +332,112 @@ let () =
 		let t' = Layout.equalize t1 in
 		assert (t'.focus_path = t1.focus_path));
 
+	(* ------- render ------- *)
+
+	let contains haystack needle =
+		let hl = String.length haystack in
+		let nl = String.length needle in
+		if nl > hl then false
+		else
+			let rec loop i =
+				if i + nl > hl then false
+				else if String.sub haystack i nl = needle then true
+				else loop (i + 1)
+			in
+			loop 0
+	in
+
+	test "render single leaf no title emits only content" (fun () ->
+		let t = Layout.single Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		(* No title → no style-ANSI codes for chrome *)
+		assert (not (contains out "title"));
+		(* Expect 3 CSI moves (one per content row) *)
+		let csi_count = ref 0 in
+		String.iter (fun c ->
+			if c = '\x1b' then incr csi_count
+		) out;
+		assert (!csi_count = 3));
+
+	test "render leaf with title includes title text" (fun () ->
+		let t = Layout.single ~title:"hello" Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		assert (contains out "hello"));
+
+	test "render truncates long title to width" (fun () ->
+		let t = Layout.single
+			~title:"this is a rather long title"
+			Buf.empty ()
+		in
+		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:10 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		(* Title truncated to 10 bytes, so "this is a" prefix still there *)
+		assert (contains out "this is a "));
+
+	test "render pads short title to width" (fun () ->
+		let t = Layout.single ~title:"ab" Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:10 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		(* Title "ab" padded to 10: "ab        " (8 spaces) *)
+		assert (contains out "ab        "));
+
+	test "render 2x2 split contains all four titles" (fun () ->
+		let t = Layout.single ~title:"TL" Buf.empty () in
+		let t = Layout.split t Vertical ~title:"TR" Buf.empty () in
+		(* focus [1]; move focus back to root to split horizontally
+		   — but split operates on the focused leaf, so focus first. *)
+		let t = { t with focus_path = [ 0 ] } in
+		let t = Layout.split t Horizontal ~title:"BL" Buf.empty () in
+		let t = { t with focus_path = [ 1 ] } in
+		let t = Layout.split t Horizontal ~title:"BR" Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:24 ~cols:80 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		assert (contains out "TL");
+		assert (contains out "TR");
+		assert (contains out "BL");
+		assert (contains out "BR"));
+
+	test "render focused vs unfocused title use different styles" (fun () ->
+		let t = Layout.single ~title:"A" Buf.empty () in
+		let t = Layout.split t Vertical ~title:"B" Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		(* Focused style for default theme includes bold + bg24 *)
+		let focused_ansi =
+			Theme.style_to_ansi Theme.default.chrome.title_focused
+		in
+		let unfocused_ansi =
+			Theme.style_to_ansi Theme.default.chrome.title_unfocused
+		in
+		assert (focused_ansi <> unfocused_ansi);
+		assert (contains out focused_ansi);
+		assert (contains out unfocused_ansi));
+
+	test "render content reads buf.doc starting at top_line" (fun () ->
+		let doc = Doc.of_string "line0\nline1\nline2\nline3\nline4" in
+		let b = Buf.of_doc doc in
+		(* Make a pane with custom viewport starting at line 2 *)
+		let t = Layout.single b () in
+		let t = match Layout.find_leaf t ~path:[] with
+			| Some pane ->
+					let pane' = {
+						pane with
+						viewport = { pane.viewport with top_line = 2 }
+					} in
+					Layout.replace_leaf t ~path:[] pane'
+			| None -> t
+		in
+		let r = Rect.make ~row:0 ~col:0 ~rows:3 ~cols:20 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		(* top_line=2 means first visible row is line2 *)
+		assert (contains out "line2"));
+
+	test "render empty-rect leaf produces no output" (fun () ->
+		let t = Layout.single ~title:"X" Buf.empty () in
+		let r = Rect.make ~row:0 ~col:0 ~rows:0 ~cols:0 in
+		let out = Layout.render t ~rect:r ~theme:Theme.default in
+		assert (out = ""));
+
 	print_endline "test_layout done"

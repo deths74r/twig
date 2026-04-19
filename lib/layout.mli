@@ -119,3 +119,27 @@ val resize : t -> delta:float -> t
 val equalize : t -> t
 (** Set every [Split.ratio] in the tree to 0.5. Focus and tree
     structure are preserved. *)
+
+(** {1 Render} *)
+
+val render : t -> rect:Rect.t -> theme:Theme.t -> string
+(** Render the layout to a string of ANSI escape sequences +
+    content. The caller writes this string to the terminal
+    (via [Terminal.write]); having [render] return a string
+    rather than side-effecting makes it directly testable via
+    snapshot comparison.
+
+    For each leaf:
+    - If [pane.title] is [Some], a title bar is drawn at the
+      top row using [theme.chrome.title_focused] (for the
+      focused pane) or [title_unfocused] (for others).
+    - Content rows show [pane.buf.doc] starting at
+      [pane.viewport.top_line]. Lines are truncated or
+      space-padded to fit the pane's width.
+
+    String clipping is byte-naive (one cell per byte). This is
+    correct for ASCII chrome and pre-wrapped span-rendered
+    content; multi-byte graphemes and ANSI escapes inside
+    buffer content are treated as literal bytes for width
+    purposes. Proper grapheme-aware rendering of buffer
+    content lands with the markdown tokenizer in Phase 4c. *)

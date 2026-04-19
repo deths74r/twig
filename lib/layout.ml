@@ -247,3 +247,66 @@ let rec equalize_tree = function
 			}
 
 let equalize t = { t with root = equalize_tree t.root }
+
+(* ------------------------------------------------------------------ *)
+(* Render                                                             *)
+(* ------------------------------------------------------------------ *)
+
+(** CSI cursor-position escape. Row and col are 1-indexed. *)
+let csi_move buf ~row ~col =
+	Buffer.add_string buf
+		(Printf.sprintf "\x1b[%d;%dH" (row + 1) (col + 1))
+
+(** Truncate [s] to [n] bytes, or right-pad with spaces if [s] is
+    shorter. Byte-naive: fine for ASCII chrome. *)
+let fit_to_width s n =
+	let len = String.length s in
+	if n <= 0 then ""
+	else if len >= n then String.sub s 0 n
+	else s ^ String.make (n - len) ' '
+
+let render_title buf (pane : pane) (rect : Rect.t) ~focused ~theme =
+	match pane.title with
+	| None -> ()
+	| Some title ->
+			let style =
+				if focused then theme.Theme.chrome.title_focused
+				else theme.chrome.title_unfocused
+			in
+			csi_move buf ~row:rect.row ~col:rect.col;
+			Buffer.add_string buf (Theme.style_to_ansi style);
+			Buffer.add_string buf (fit_to_width title rect.cols);
+			Buffer.add_string buf Theme.reset
+
+let render_content buf (pane : pane) (rect : Rect.t) =
+	let title_rows = if pane.title <> None then 1 else 0 in
+	let content_start = rect.row + title_rows in
+	let content_rows = rect.rows - title_rows in
+	if content_rows <= 0 || rect.cols <= 0 then ()
+	else begin
+		let doc = pane.buf.Buf.doc in
+		let top = pane.viewport.Viewport.top_line in
+		for i = 0 to content_rows - 1 do
+			let doc_row = top + i in
+			let line =
+				match Doc.get_line doc_row doc with
+				| Some s -> s
+				| None -> ""
+			in
+			csi_move buf ~row:(content_start + i) ~col:rect.col;
+			Buffer.add_string buf (fit_to_width line rect.cols)
+		done
+	end
+
+let render t ~rect ~theme =
+	let buf = Buffer.create 512 in
+	let leaves = leaf_rects t.root rect in
+	List.iter
+		(fun (path, pane, r) ->
+			if not (Rect.is_empty r) then begin
+				let focused = path = t.focus_path in
+				render_title buf pane r ~focused ~theme;
+				render_content buf pane r
+			end)
+		leaves;
+	Buffer.contents buf
