@@ -86,6 +86,16 @@ val leaf_rects : t -> Rect.t -> (path * pane * Rect.t) list
     the overall layout rect. Used to sync viewport dimensions
     with actual screen size. *)
 
+val swap : t -> rect:Rect.t ->
+	[ `Left | `Right | `Up | `Down ] -> t
+(** Swap the focused pane with its nearest neighbor in the
+    given direction. Focus follows the swapped pane. *)
+
+val fullscreen : t -> t
+(** Toggle fullscreen. Entering: stash tree, focused pane
+    fills root. Exiting: restore stashed tree with updated
+    pane contents. *)
+
 val focus : t -> pane option
 (** The currently-focused pane, or [None] if the layout is
     somehow in an invalid state (should not happen for layouts

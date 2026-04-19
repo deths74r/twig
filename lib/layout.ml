@@ -159,6 +159,99 @@ let leaf_rects t rect =
 	leaf_rects_of_tree t.root rect
 
 (* ------------------------------------------------------------------ *)
+(* Swap                                                               *)
+(* ------------------------------------------------------------------ *)
+
+let swap t ~rect dir =
+	let leaves = leaf_rects_of_tree t.root rect in
+	let focused =
+		List.find_opt (fun (p, _, _) -> p = t.focus_path) leaves
+	in
+	match focused with
+	| None -> t
+	| Some (_, _, fr) ->
+		let fr_end_col = fr.Rect.col + fr.cols in
+		let fr_end_row = fr.Rect.row + fr.rows in
+		let fc_row = fr.row + (fr.rows / 2) in
+		let fc_col = fr.col + (fr.cols / 2) in
+		let in_direction (r : Rect.t) =
+			match dir with
+			| `Left  -> r.col + r.cols <= fr.col
+			| `Right -> r.col >= fr_end_col
+			| `Up    -> r.row + r.rows <= fr.row
+			| `Down  -> r.row >= fr_end_row
+		in
+		let dist (r : Rect.t) =
+			let rc_row = r.row + (r.rows / 2) in
+			let rc_col = r.col + (r.cols / 2) in
+			abs (rc_row - fc_row) + abs (rc_col - fc_col)
+		in
+		let candidates =
+			List.filter
+				(fun (p, _, r) -> p <> t.focus_path && in_direction r)
+				leaves
+		in
+		match candidates with
+		| [] -> t
+		| first :: rest ->
+			let best =
+				List.fold_left
+					(fun best c ->
+						let (_, _, br) = best in
+						let (_, _, cr) = c in
+						if dist cr < dist br then c else best)
+					first rest
+			in
+			let (target_path, target_pane, _) = best in
+			(* Get the focused pane *)
+			(match find_leaf t ~path:t.focus_path with
+			 | None -> t
+			 | Some focused_pane ->
+				 (* Swap: put focused at target's path, target at focused's path *)
+				 let t = replace_leaf t ~path:target_path focused_pane in
+				 let t = replace_leaf t ~path:t.focus_path target_pane in
+				 (* Focus follows the moved pane *)
+				 { t with focus_path = target_path })
+
+(* ------------------------------------------------------------------ *)
+(* Fullscreen                                                         *)
+(* ------------------------------------------------------------------ *)
+
+type fullscreen_stash = {
+	stashed_root : tree;
+	stashed_focus : path;
+}
+
+let fullscreen_stash : fullscreen_stash option ref = ref None
+
+let fullscreen t =
+	match !fullscreen_stash with
+	| Some stash ->
+		(* Exit fullscreen: restore stashed tree, update the
+		   focused pane's buf with whatever changed while
+		   fullscreened *)
+		let updated_pane = focus t in
+		let restored = { root = stash.stashed_root;
+						 focus_path = stash.stashed_focus } in
+		let restored = match updated_pane with
+			| Some pane -> replace_leaf restored
+				~path:stash.stashed_focus pane
+			| None -> restored
+		in
+		fullscreen_stash := None;
+		restored
+	| None ->
+		(* Enter fullscreen: stash tree, replace root with focused leaf *)
+		match focus t with
+		| None -> t
+		| Some pane ->
+			fullscreen_stash := Some {
+				stashed_root = t.root;
+				stashed_focus = t.focus_path;
+			};
+			{ root = Leaf pane; focus_path = [] }
+
+(* ------------------------------------------------------------------ *)
 (* Focus                                                              *)
 (* ------------------------------------------------------------------ *)
 
