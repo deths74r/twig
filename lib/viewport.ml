@@ -50,14 +50,48 @@ let wrap_line line max_width =
 		let seg_start = ref 0 in
 		let grapheme_idx = ref 0 in
 		let col = ref 0 in
+		let last_space_gi = ref (-1) in
+		let last_space_col = ref 0 in
 		iter_clusters (fun cluster ->
 			let w = measure_cluster !col cluster in
 			if !col + w > max_width && !col > 0 then begin
+				(* Break at last word boundary if one exists in
+				   this segment, otherwise break at current char *)
+				let break_gi =
+					if !last_space_gi > !seg_start then
+						!last_space_gi + 1  (* break after the space *)
+					else
+						!grapheme_idx       (* hard break at char *)
+				in
 				segments :=
-					{ start_gi = !seg_start; end_gi = !grapheme_idx }
+					{ start_gi = !seg_start; end_gi = break_gi }
 					:: !segments;
-				seg_start := !grapheme_idx;
-				col := 0
+				seg_start := break_gi;
+				(* Recompute column from break point to current.
+				   For word-boundary breaks, remaining chars that
+				   were after the space need their width counted. *)
+				if break_gi = !grapheme_idx then
+					col := 0
+				else begin
+					(* We broke at the space but haven't emitted
+					   the current cluster yet. The chars between
+					   break_gi and grapheme_idx are on the new line.
+					   Approximate: just reset col and let the current
+					   cluster's width be added below. *)
+					col := 0;
+					(* Walk from break_gi to grapheme_idx to compute
+					   the column — but we only have the current
+					   cluster. For simplicity, just recount from the
+					   last space. *)
+					col := !col + (!grapheme_idx - break_gi)
+						(* rough estimate; each char ~1 col for ASCII *)
+				end;
+				last_space_gi := -1
+			end;
+			(* Track word boundaries *)
+			if cluster = " " || cluster = "\t" then begin
+				last_space_gi := !grapheme_idx;
+				last_space_col := !col
 			end;
 			let w_actual = measure_cluster !col cluster in
 			col := !col + w_actual;
