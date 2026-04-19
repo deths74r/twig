@@ -534,7 +534,7 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 				| Plain { prefix_first; prefix_rest; prefix_style } ->
 						let prefix = if !doc_row = 0 then prefix_first else prefix_rest in
 						let prefix_byte_len = String.length prefix in
-						let prefix_gi_len = Grapheme.count prefix in
+						let prefix_len = Grapheme.count prefix in
 						let line_text = prefix ^ line in
 						let segments =
 							if pane.viewport.Viewport.wrap then
@@ -548,8 +548,34 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 							| Some style -> [{ Markdown.start = 0; stop = prefix_byte_len; style }]
 							| None -> []
 						in
-						segments, prefix_gi_len, line_text, spans
+						segments, prefix_len, line_text, spans
 			in
+			
+			let selection_spans =
+				match pane.buf.mark with
+				| None -> []
+				| Some mark ->
+					let start_pos, end_pos =
+						if Position.compare mark pane.buf.cursor <= 0 then mark, pane.buf.cursor
+						else pane.buf.cursor, mark
+					in
+					if !doc_row >= start_pos.line && !doc_row <= end_pos.line then begin
+						let start_byte =
+							if !doc_row = start_pos.line then
+								Grapheme.byte_of_index line_text (start_pos.column + prefix_len)
+							else 0
+						in
+						let end_byte =
+							if !doc_row = end_pos.line then
+								Grapheme.byte_of_index line_text (end_pos.column + prefix_len)
+							else String.length line_text
+						in
+						if start_byte < end_byte then
+							[{ Markdown.start = start_byte; stop = end_byte; style = theme.Theme.syntax.selection }]
+						else []
+					end else []
+			in
+			let spans = spans @ selection_spans in
 			
 			List.iter
 				(fun (seg : Viewport.segment) ->
