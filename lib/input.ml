@@ -194,8 +194,13 @@ let decode_utf8 lead =
 		!result
 	end
 
+let wake_flag : bool Atomic.t = Atomic.make false
+
+let wake () = Atomic.set wake_flag true
+
 let rec read () =
-	if Terminal.resize_flag () then Resize
+	if Atomic.compare_and_set wake_flag true false then Unknown
+	else if Terminal.resize_flag () then Resize
 	else begin
 		let ready =
 			try

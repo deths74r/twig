@@ -26,3 +26,14 @@ type event =
 	| Unknown
 
 val read : unit -> event
+(** Block for the next input event. Returns early as [Unknown]
+    if [wake ()] is called from another fiber, within the next
+    100ms (the internal select timeout). *)
+
+val wake : unit -> unit
+(** Flip the wake flag so the next [read] (or the one in progress
+    at its next select-timeout iteration) returns [Unknown]
+    instead of continuing to block. Used to drive the TUI render
+    loop on background events (Event_bus publishes). Thread-safe:
+    multiple wakes before a read is fine — the flag is sticky
+    until [read] consumes it. *)
