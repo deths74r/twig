@@ -81,6 +81,11 @@ val replace_leaf : t -> path:path -> pane -> t
 
 (** {1 Focus} *)
 
+val leaf_rects : t -> Rect.t -> (path * pane * Rect.t) list
+(** Compute the screen rectangle for every leaf pane given
+    the overall layout rect. Used to sync viewport dimensions
+    with actual screen size. *)
+
 val focus : t -> pane option
 (** The currently-focused pane, or [None] if the layout is
     somehow in an invalid state (should not happen for layouts

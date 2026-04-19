@@ -139,7 +139,7 @@ let focus t = find_leaf t ~path:t.focus_path
 (** Compute the rectangle for every leaf under [tree] given a
     parent [rect]. Accumulated in right-to-left order; caller
     doesn't rely on the order. *)
-let leaf_rects tree root_rect =
+let leaf_rects_of_tree tree root_rect =
 	let rec go tree rect rev_path acc =
 		match tree with
 		| Leaf pane ->
@@ -155,12 +155,15 @@ let leaf_rects tree root_rect =
 	in
 	go tree root_rect [] []
 
+let leaf_rects t rect =
+	leaf_rects_of_tree t.root rect
+
 (* ------------------------------------------------------------------ *)
 (* Focus                                                              *)
 (* ------------------------------------------------------------------ *)
 
 let focus_move t ~rect dir =
-	let leaves = leaf_rects t.root rect in
+	let leaves = leaf_rects_of_tree t.root rect in
 	let focused =
 		List.find_opt (fun (p, _, _) -> p = t.focus_path) leaves
 	in
@@ -446,7 +449,7 @@ let render_content (pane : pane) (rect : Rect.t) ~theme =
 	end
 
 let render t ~rect ~theme =
-	let leaves = leaf_rects t.root rect in
+	let leaves = leaf_rects_of_tree t.root rect in
 	List.iter
 		(fun (path, pane, r) ->
 			if not (Rect.is_empty r) then
