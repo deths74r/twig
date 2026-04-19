@@ -19,6 +19,7 @@ type event =
 	| Doc_home
 	| Doc_end
 	| Shift_space
+	| Shift_enter
 	| Alt of char
 	| Ctrl of char
 	| Eof

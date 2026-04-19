@@ -19,6 +19,7 @@ type event =
 	| Doc_home
 	| Doc_end
 	| Shift_space
+	| Shift_enter
 	| Alt of char
 	| Ctrl of char
 	| Eof
@@ -112,6 +113,7 @@ let read_escape_sequence () =
 				in
 				let decode_csi_u cp shift alt ctrl text_cp =
 					if cp = 27 then Escape
+					else if cp = 13 && shift then Shift_enter
 					else if cp = 13 then Enter
 					else if cp = 9 && shift then Shift_tab
 					else if cp = 9 then Tab
