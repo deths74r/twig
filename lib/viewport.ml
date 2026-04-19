@@ -1,9 +1,25 @@
-(** Viewport primitives — line wrapping, segment math.
+(** Viewport — visible-window geometry and line-wrap math.
 
-    Pure functions for computing how text maps to screen
-    coordinates. No dependency on editor state, themes, or
-    syntax. Used by the render layer and by applications
-    that need wrap-aware cursor positioning. *)
+    See viewport.mli for the public contract. *)
+
+type t = {
+	top_line : int;
+	rows     : int;
+	cols     : int;
+	wrap     : bool;
+}
+
+let make ~rows ~cols =
+	let rows = if rows < 0 then 0 else rows in
+	let cols = if cols < 0 then 0 else cols in
+	{ top_line = 0; rows; cols; wrap = true }
+
+let scroll_to vp ~line =
+	{ vp with top_line = if line < 0 then 0 else line }
+
+(* ------------------------------------------------------------------ *)
+(* Wrap math                                                          *)
+(* ------------------------------------------------------------------ *)
 
 let tab_width = 8
 
