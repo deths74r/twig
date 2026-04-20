@@ -178,6 +178,8 @@ let () =
 			title = Some "swapped";
 			render_mode = Markdown;
 			min_rows = 20;
+			content_inset_top = 0;
+			content_inset_bottom = 0;
 		} in
 		let t' = Layout.replace_leaf t ~path:[] new_pane in
 		match Layout.focus t' with
@@ -192,6 +194,8 @@ let () =
 			title = None;
 			render_mode = Markdown;
 			min_rows = 20;
+			content_inset_top = 0;
+			content_inset_bottom = 0;
 		} in
 		let t' = Layout.replace_leaf t ~path:[ 42 ] dummy in
 		(* original tree preserved *)

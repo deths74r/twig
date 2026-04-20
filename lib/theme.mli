@@ -49,6 +49,11 @@ type chrome = {
 	tab_inactive      : style;
 	warning           : style;
 	error             : style;
+	rule              : style;
+		(** Horizontal-rule chrome between chrome regions (e.g.
+		    LMI's input-pane top/bottom rules). Themes pick a dim
+		    color distinct from status / title so rules read as
+		    structural separators rather than content. *)
 }
 
 type markdown = {

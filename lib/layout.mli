@@ -31,6 +31,12 @@ type pane = {
 	title       : string option;
 	render_mode : render_mode;
 	min_rows    : int;
+	content_inset_top    : int;
+		(** Rows reserved at the top of the content area AFTER the
+		    title. The caller draws whatever it wants in those
+		    rows; [render_content] just shifts content down. *)
+	content_inset_bottom : int;
+		(** Symmetric bottom inset. *)
 }
 
 type tree =
@@ -51,11 +57,16 @@ type t = {
 
 (** {1 Construction} *)
 
-val single : ?title:string -> ?render_mode:render_mode -> ?min_rows:int -> Buf.t -> unit -> t
+val single : ?title:string -> ?render_mode:render_mode -> ?min_rows:int ->
+	?content_inset_top:int -> ?content_inset_bottom:int ->
+	Buf.t -> unit -> t
 (** [single buf ()] returns a one-leaf layout with [buf] at the
     root and focus on it. *)
 
-val split : t -> dir -> ?title:string -> ?render_mode:render_mode -> ?min_rows:int -> Buf.t -> unit -> t
+val split : t -> dir -> ?title:string -> ?render_mode:render_mode ->
+	?min_rows:int ->
+	?content_inset_top:int -> ?content_inset_bottom:int ->
+	Buf.t -> unit -> t
 (** [split t dir buf ()] splits the focused leaf: the leaf at
     [t.focus_path] is replaced by a [Split] whose left/top child
     is the original leaf and right/bottom child is a new leaf

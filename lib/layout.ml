@@ -14,6 +14,14 @@ type pane = {
 	title       : string option;
 	render_mode : render_mode;
 	min_rows    : int;
+	content_inset_top    : int;
+		(** Rows reserved at the top of the content area, AFTER the
+		    title. The caller (typically a chrome layer) is
+		    responsible for drawing in these rows; [render_content]
+		    just shifts content down by this many rows. *)
+	content_inset_bottom : int;
+		(** Rows reserved at the bottom of the content area. Same
+		    shape as [content_inset_top]. *)
 }
 
 type tree =
@@ -34,12 +42,15 @@ type t = {
 
 let default_viewport = Viewport.make ~rows:0 ~cols:0
 
-let make_pane ?title ?(render_mode=Markdown) ?(min_rows=0) buf = {
+let make_pane ?title ?(render_mode=Markdown) ?(min_rows=0)
+		?(content_inset_top=0) ?(content_inset_bottom=0) buf = {
 	buf;
 	viewport = default_viewport;
 	title;
 	render_mode;
 	min_rows;
+	content_inset_top;
+	content_inset_bottom;
 }
 
 (* ------------------------------------------------------------------ *)
@@ -68,14 +79,19 @@ let rec replace_subtree tree path replacement =
 (* Construction                                                       *)
 (* ------------------------------------------------------------------ *)
 
-let single ?title ?render_mode ?min_rows buf () =
-	{ root = Leaf (make_pane ?title ?render_mode ?min_rows buf); focus_path = [] }
+let single ?title ?render_mode ?min_rows
+		?content_inset_top ?content_inset_bottom buf () =
+	{ root = Leaf (make_pane ?title ?render_mode ?min_rows
+		?content_inset_top ?content_inset_bottom buf);
+	  focus_path = [] }
 
-let split t dir ?title ?render_mode ?min_rows buf () =
+let split t dir ?title ?render_mode ?min_rows
+		?content_inset_top ?content_inset_bottom buf () =
 	match find_subtree_opt t.root t.focus_path with
 	| None -> t
 	| Some original ->
-			let new_leaf = Leaf (make_pane ?title ?render_mode ?min_rows buf) in
+			let new_leaf = Leaf (make_pane ?title ?render_mode ?min_rows
+				?content_inset_top ?content_inset_bottom buf) in
 			let replacement =
 				Split { dir; ratio = 0.5;
 				        left = original; right = new_leaf }
@@ -494,8 +510,12 @@ let render_line ~target_row ~target_col ~max_cols ~line
 let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 		~show_cursor_cell =
 	let title_rows = if pane.title <> None then 1 else 0 in
-	let content_start = rect.row + title_rows in
-	let content_rows = rect.rows - title_rows in
+	let content_start =
+		rect.row + title_rows + pane.content_inset_top in
+	let content_rows =
+		rect.rows - title_rows
+		- pane.content_inset_top - pane.content_inset_bottom
+	in
 	let cursor_pos = ref None in
 	if content_rows <= 0 || rect.cols <= 0 then ()
 	else begin

@@ -29,6 +29,7 @@ type chrome = {
 	tab_inactive      : style;
 	warning           : style;
 	error             : style;
+	rule              : style;
 }
 
 type markdown = {
@@ -207,6 +208,7 @@ let default_chrome = {
 	tab_inactive     = s ~fg:(Ansi256 245) ();
 	warning          = s ~fg:(Ansi 3) ();
 	error            = s ~fg:(Ansi 1) ~bold:true ();
+	rule             = s ~fg:(Ansi256 240) ();
 }
 
 let default_markdown = {
@@ -340,22 +342,22 @@ let parse_chrome root =
 		[ "status"; "title_focused"; "title_unfocused";
 		  "border_focused";
 		  "tab_active"; "tab_inactive";
-		  "warning"; "error" ]
+		  "warning"; "error"; "rule" ]
 	in
 	let fallbacks =
 		[ fb.status; fb.title_focused; fb.title_unfocused;
 		  fb.border_focused;
 		  fb.tab_active; fb.tab_inactive;
-		  fb.warning; fb.error ]
+		  fb.warning; fb.error; fb.rule ]
 	in
 	let* xs = parse_labelled root [ "chrome" ] ~labels ~fallbacks in
 	match xs with
-	| [ status; tf; tu; bf; ta; ti; w; e ] ->
+	| [ status; tf; tu; bf; ta; ti; w; e; r ] ->
 			Ok {
 				status = status; title_focused = tf; title_unfocused = tu;
 				border_focused = bf;
 				tab_active = ta; tab_inactive = ti;
-				warning = w; error = e;
+				warning = w; error = e; rule = r;
 			}
 	| _ -> err "internal: parse_chrome length mismatch"
 
