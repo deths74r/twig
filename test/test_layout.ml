@@ -407,8 +407,11 @@ let () =
 		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:10 in
 		let out, _cursor = Terminal.with_capture (fun () ->
 			Layout.render t ~rect:r ~theme:Theme.default) in
-		(* Title "ab" padded to 10: "ab        " (8 spaces) *)
-		assert (contains out "ab        "));
+		(* Title text is styled, trailing padding is plain so the
+		   highlight surrounds just the text. Both pieces must be
+		   present to reach full width = 10. *)
+		assert (contains out "ab");
+		assert (contains out "        "));   (* ≥ 8 spaces of padding *)
 
 	test "render 2x2 split contains all four titles" (fun () ->
 		let t = Layout.single ~title:"TL" Buf.empty () in

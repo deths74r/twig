@@ -435,15 +435,6 @@ let equalize t = { t with root = equalize_tree t.root }
 (* Render                                                             *)
 (* ------------------------------------------------------------------ *)
 
-(** Right-truncate [s] to fit [n] bytes. Byte-naive (the §18:9
-    scope carve — ASCII chrome and pre-wrapped span content
-    only; grapheme-aware width is future work). *)
-let truncate_to s n =
-	let len = String.length s in
-	if n <= 0 then ""
-	else if len <= n then s
-	else String.sub s 0 n
-
 let render_title (pane : pane) (rect : Rect.t) ~focused ~theme =
 	match pane.title with
 	| None -> ()
@@ -452,16 +443,22 @@ let render_title (pane : pane) (rect : Rect.t) ~focused ~theme =
 				if focused then theme.Theme.chrome.title_focused
 				else theme.chrome.title_unfocused
 			in
-			let text = truncate_to title rect.cols in
-			let padded =
-				text
-				^ String.make (max 0 (rect.cols - String.length text)) ' '
-			in
+			(* Grapheme-width truncation so a title with non-ASCII
+			   glyphs (· —) doesn't leave trailing cells unstyled. *)
+			let text = Grapheme.truncate_to_width title rect.cols in
+			let text_cells = Grapheme.display_width text in
+			let pad = max 0 (rect.cols - text_cells) in
 			Terminal.move ~row:rect.row ~col:rect.col;
 			let ansi = Theme.style_to_ansi style in
+			(* Styled title text first, then unstyled padding that
+			   fills the rest of the row. The padding is plain so the
+			   title highlight surrounds only the text, not the whole
+			   row — matches the "highlight the text not the bar"
+			   aesthetic. *)
 			if ansi <> "" then Terminal.write ansi;
-			Terminal.write padded;
-			if ansi <> "" then Terminal.write Theme.reset
+			Terminal.write text;
+			if ansi <> "" then Terminal.write Theme.reset;
+			if pad > 0 then Terminal.write (String.make pad ' ')
 
 (** Emit one source line at [target_row] starting at [target_col],
     clipped to [max_cols] total bytes. Spans drive per-range
