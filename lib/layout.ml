@@ -314,7 +314,17 @@ let focus_move t ~rect dir =
 (* Resize                                                             *)
 (* ------------------------------------------------------------------ *)
 
-let minimum_cells = 20
+(** Width floor for VERTICAL splits (left/right) — we don't allow
+    a pane to shrink below this many columns. Rows on horizontal
+    splits use the per-leaf [min_rows] field instead, falling
+    back to 1 for leaves that didn't opt in. *)
+let minimum_cols = 20
+
+(** Per-leaf fallback for the row dimension when a pane didn't
+    set [min_rows] explicitly. 1 row keeps a pane from vanishing
+    entirely while letting the Input pane live at its explicit
+    min_rows = 2 and Convo collapse close to full height. *)
+let default_min_rows = 1
 
 (** Compute the rect of the subtree at [path] given [root_rect].
     Returns None if the path is invalid. *)
@@ -344,8 +354,8 @@ let ratio_bounds (dir : dir) (parent_rect : Rect.t) (s : tree) =
 		match tree with
 		| Leaf p ->
 				(match dir with
-				 | Horizontal -> max p.min_rows minimum_cells
-				 | Vertical -> minimum_cells)
+				 | Horizontal -> max p.min_rows default_min_rows
+				 | Vertical -> minimum_cols)
 		| Split s_child ->
 				if s_child.dir = dir then
 					min_req s_child.left + min_req s_child.right

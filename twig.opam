@@ -1,6 +1,6 @@
 opam-version: "2.0"
 name: "twig"
-version: "0.2.3"
+version: "0.2.4"
 synopsis: "Terminal buffer engine — AVL doc, grapheme-aware buf, splittable layout, markdown renderer"
 depends: [
   "ocaml" {>= "5.2"}
