@@ -156,7 +156,9 @@ val equalize : t -> t
 
 (** {1 Render} *)
 
-val render : t -> rect:Rect.t -> theme:Theme.t -> (int * int) option
+val render :
+	?show_cursor_cell:bool ->
+	t -> rect:Rect.t -> theme:Theme.t -> (int * int) option
 (** Render the layout to the terminal via [Terminal.write_at]
     under [Terminal.with_clip] (spec 18_tui.md §9). Each leaf
     is drawn inside its computed sub-rect:

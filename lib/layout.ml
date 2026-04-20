@@ -494,7 +494,8 @@ let render_line ~target_row ~target_col ~max_cols ~line
 	if !remaining > 0 then
 		Terminal.write (String.make !remaining ' ')
 
-let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
+let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
+		~show_cursor_cell =
 	let title_rows = if pane.title <> None then 1 else 0 in
 	let content_start = rect.row + title_rows in
 	let content_rows = rect.rows - title_rows in
@@ -615,7 +616,37 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 						else []
 					end else []
 			in
-			let spans = spans @ selection_spans in
+			let cursor_cell_span =
+				if not (focused && show_cursor_cell) then []
+				else if !doc_row <> pane.buf.cursor.line then []
+				else begin
+					let cur_gi = pane.buf.cursor.column + prefix_len in
+					let line_gi_count = Grapheme.count line_text in
+					let cur_gi = min cur_gi line_gi_count in
+					let start_byte =
+						Grapheme.byte_of_index line_text cur_gi
+					in
+					(* Next grapheme's byte, or end of line if on last. *)
+					let stop_byte =
+						if cur_gi >= line_gi_count then
+							(* Past end of content — emit a synthetic
+							   1-column reverse-video space. Done after
+							   the normal render by painting a ' ' span
+							   that extends past line text; render_line
+							   clips to max_cols, the pad-to-full-width
+							   step supplies the underlying cell. *)
+							start_byte
+						else
+							Grapheme.byte_of_index line_text (cur_gi + 1)
+					in
+					if start_byte >= stop_byte then []
+					else
+						[{ Markdown.start = start_byte;
+						   stop = stop_byte;
+						   style = theme.Theme.syntax.selection }]
+				end
+			in
+			let spans = spans @ selection_spans @ cursor_cell_span in
 			
 			List.iter
 				(fun (seg : Viewport.segment) ->
@@ -677,7 +708,7 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 	end;
 	!cursor_pos
 
-let render t ~rect ~theme =
+let render ?(show_cursor_cell = false) t ~rect ~theme =
 	let leaves = leaf_rects_of_tree t.root rect in
 	let cursor_pos = ref None in
 	List.iter
@@ -686,7 +717,10 @@ let render t ~rect ~theme =
 				Terminal.with_clip r (fun () ->
 					let focused = path = t.focus_path in
 					render_title pane r ~focused ~theme;
-					let c = render_content pane r ~theme ~focused in
+					let c =
+						render_content pane r ~theme ~focused
+							~show_cursor_cell
+					in
 					if focused then cursor_pos := c))
 		leaves;
 	!cursor_pos
