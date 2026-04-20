@@ -20,8 +20,15 @@ type pane = {
 		    responsible for drawing in these rows; [render_content]
 		    just shifts content down by this many rows. *)
 	content_inset_bottom : int;
-		(** Rows reserved at the bottom of the content area. Same
-		    shape as [content_inset_top]. *)
+		(** Symmetric bottom inset. *)
+	content_inset_left   : int;
+		(** Columns reserved at the left of the content area.
+		    Content is drawn starting at [rect.col + inset_left]
+		    and wrap width is reduced accordingly. Title and the
+		    top/bottom reserved rows are unaffected (they remain
+		    full-width). *)
+	content_inset_right  : int;
+		(** Symmetric right inset. *)
 }
 
 type tree =
@@ -43,7 +50,8 @@ type t = {
 let default_viewport = Viewport.make ~rows:0 ~cols:0
 
 let make_pane ?title ?(render_mode=Markdown) ?(min_rows=0)
-		?(content_inset_top=0) ?(content_inset_bottom=0) buf = {
+		?(content_inset_top=0) ?(content_inset_bottom=0)
+		?(content_inset_left=0) ?(content_inset_right=0) buf = {
 	buf;
 	viewport = default_viewport;
 	title;
@@ -51,6 +59,8 @@ let make_pane ?title ?(render_mode=Markdown) ?(min_rows=0)
 	min_rows;
 	content_inset_top;
 	content_inset_bottom;
+	content_inset_left;
+	content_inset_right;
 }
 
 (* ------------------------------------------------------------------ *)
@@ -80,18 +90,22 @@ let rec replace_subtree tree path replacement =
 (* ------------------------------------------------------------------ *)
 
 let single ?title ?render_mode ?min_rows
-		?content_inset_top ?content_inset_bottom buf () =
+		?content_inset_top ?content_inset_bottom
+		?content_inset_left ?content_inset_right buf () =
 	{ root = Leaf (make_pane ?title ?render_mode ?min_rows
-		?content_inset_top ?content_inset_bottom buf);
+		?content_inset_top ?content_inset_bottom
+		?content_inset_left ?content_inset_right buf);
 	  focus_path = [] }
 
 let split t dir ?title ?render_mode ?min_rows
-		?content_inset_top ?content_inset_bottom buf () =
+		?content_inset_top ?content_inset_bottom
+		?content_inset_left ?content_inset_right buf () =
 	match find_subtree_opt t.root t.focus_path with
 	| None -> t
 	| Some original ->
 			let new_leaf = Leaf (make_pane ?title ?render_mode ?min_rows
-				?content_inset_top ?content_inset_bottom buf) in
+				?content_inset_top ?content_inset_bottom
+				?content_inset_left ?content_inset_right buf) in
 			let replacement =
 				Split { dir; ratio = 0.5;
 				        left = original; right = new_leaf }
@@ -516,14 +530,20 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 		rect.rows - title_rows
 		- pane.content_inset_top - pane.content_inset_bottom
 	in
+	let content_col =
+		rect.col + pane.content_inset_left in
+	let content_cols =
+		max 0 (rect.cols - pane.content_inset_left
+		                 - pane.content_inset_right)
+	in
 	let cursor_pos = ref None in
-	if content_rows <= 0 || rect.cols <= 0 then ()
+	if content_rows <= 0 || content_cols <= 0 then ()
 	else begin
 		let doc = pane.buf.Buf.doc in
 		let top = pane.viewport.Viewport.top_line in
 		let total_lines = Doc.line_count doc in
 		let md_theme = theme.Theme.markdown in
-		let wrap_width = rect.cols in
+		let wrap_width = content_cols in
 		(* Prime Markdown state through lines above the viewport *)
 		let state = ref Markdown.init in
 		for doc_row = 0 to top - 1 do
@@ -702,14 +722,14 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 								   except if it's strictly < end_gi OR it's the very end of the line. *)
 								let is_last_seg = seg.end_gi = Grapheme.count line_text in
 								if cursor_col < seg.end_gi || is_last_seg then
-									cursor_pos := Some (content_start + !screen_row, rect.col + (cursor_col - seg.start_gi))
+									cursor_pos := Some (content_start + !screen_row, content_col + (cursor_col - seg.start_gi))
 							end
 						end;
-						
+
 						render_line
 							~target_row:(content_start + !screen_row)
-							~target_col:rect.col
-							~max_cols:rect.cols
+							~target_col:content_col
+							~max_cols:content_cols
 							~line:seg_text ~spans:seg_spans;
 						incr screen_row
 					end)
@@ -719,8 +739,8 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 		(* Clear remaining screen rows *)
 		for i = !screen_row to content_rows - 1 do
 			Terminal.move
-				~row:(content_start + i) ~col:rect.col;
-			Terminal.write (String.make rect.cols ' ')
+				~row:(content_start + i) ~col:content_col;
+			Terminal.write (String.make content_cols ' ')
 		done
 	end;
 	!cursor_pos

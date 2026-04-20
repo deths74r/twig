@@ -180,6 +180,8 @@ let () =
 			min_rows = 20;
 			content_inset_top = 0;
 			content_inset_bottom = 0;
+			content_inset_left = 0;
+			content_inset_right = 0;
 		} in
 		let t' = Layout.replace_leaf t ~path:[] new_pane in
 		match Layout.focus t' with
@@ -196,6 +198,8 @@ let () =
 			min_rows = 20;
 			content_inset_top = 0;
 			content_inset_bottom = 0;
+			content_inset_left = 0;
+			content_inset_right = 0;
 		} in
 		let t' = Layout.replace_leaf t ~path:[ 42 ] dummy in
 		(* original tree preserved *)

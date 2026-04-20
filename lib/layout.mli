@@ -37,6 +37,14 @@ type pane = {
 		    rows; [render_content] just shifts content down. *)
 	content_inset_bottom : int;
 		(** Symmetric bottom inset. *)
+	content_inset_left   : int;
+		(** Columns reserved at the left of the content area.
+		    Content-line rendering starts at [rect.col + inset_left]
+		    with wrap width reduced accordingly. Title and the
+		    top/bottom reserved rows are unaffected (those remain
+		    full-width; chrome drawing there is the caller's job). *)
+	content_inset_right  : int;
+		(** Symmetric right inset. *)
 }
 
 type tree =
@@ -59,6 +67,7 @@ type t = {
 
 val single : ?title:string -> ?render_mode:render_mode -> ?min_rows:int ->
 	?content_inset_top:int -> ?content_inset_bottom:int ->
+	?content_inset_left:int -> ?content_inset_right:int ->
 	Buf.t -> unit -> t
 (** [single buf ()] returns a one-leaf layout with [buf] at the
     root and focus on it. *)
@@ -66,6 +75,7 @@ val single : ?title:string -> ?render_mode:render_mode -> ?min_rows:int ->
 val split : t -> dir -> ?title:string -> ?render_mode:render_mode ->
 	?min_rows:int ->
 	?content_inset_top:int -> ?content_inset_bottom:int ->
+	?content_inset_left:int -> ?content_inset_right:int ->
 	Buf.t -> unit -> t
 (** [split t dir buf ()] splits the focused leaf: the leaf at
     [t.focus_path] is replaced by a [Split] whose left/top child
