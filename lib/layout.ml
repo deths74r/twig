@@ -508,10 +508,21 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 			state := s
 		done;
 		(* Render doc lines with soft wrapping. Each doc line
-		   may produce multiple screen rows via wrap_line. *)
+		   may produce multiple screen rows via wrap_line.
+
+		   Plain-mode panes ALWAYS render doc_row 0 (with the line
+		   defaulting to "") even when [total_lines = 0]: a Plain
+		   pane has a prefix that should always show — that's the
+		   whole point of the render mode. Markdown panes skip the
+		   empty-doc case (nothing to tokenize). *)
+		let effective_total =
+			match pane.render_mode with
+			| Markdown -> total_lines
+			| Plain _ -> max 1 total_lines
+		in
 		let screen_row = ref 0 in
 		let doc_row = ref top in
-		while !screen_row < content_rows && !doc_row < total_lines do
+		while !screen_row < content_rows && !doc_row < effective_total do
 			let line =
 				Option.value (Doc.get_line !doc_row doc) ~default:""
 			in
