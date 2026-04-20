@@ -536,6 +536,7 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 						let prefix_byte_len = String.length prefix in
 						let prefix_len = Grapheme.count prefix in
 						let line_text = prefix ^ line in
+						let line_text_len = String.length line_text in
 						let segments =
 							if pane.viewport.Viewport.wrap then
 								Viewport.wrap_line line_text wrap_width
@@ -543,12 +544,30 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused =
 								[{ Viewport.start_gi = 0;
 								   end_gi = Grapheme.count line_text }]
 						in
-						let spans =
+						(* Spans must cover every byte of line_text per
+						   Markdown.tokenize_line's contract (render_line
+						   drops any byte not in a span). Prefix gets the
+						   optional style, the rest gets a plain span so
+						   typed content actually renders. *)
+						let prefix_span =
 							match prefix_style with
-							| Some style -> [{ Markdown.start = 0; stop = prefix_byte_len; style }]
-							| None -> []
+							| Some style ->
+									[{ Markdown.start = 0;
+									   stop = prefix_byte_len;
+									   style }]
+							| None ->
+									[{ Markdown.start = 0;
+									   stop = prefix_byte_len;
+									   style = Theme.plain }]
 						in
-						segments, prefix_len, line_text, spans
+						let rest_span =
+							if prefix_byte_len < line_text_len then
+								[{ Markdown.start = prefix_byte_len;
+								   stop = line_text_len;
+								   style = Theme.plain }]
+							else []
+						in
+						segments, prefix_len, line_text, prefix_span @ rest_span
 			in
 			
 			let selection_spans =
