@@ -491,9 +491,15 @@ let render_title (pane : pane) (rect : Rect.t) ~focused ~theme =
 			if pad > 0 then Terminal.write (String.make pad ' ')
 
 (** Emit one source line at [target_row] starting at [target_col],
-    clipped to [max_cols] total bytes. Spans drive per-range
+    clipped to [max_cols] display cells. Spans drive per-range
     styling. Remaining width past the last span is padded with
-    plain spaces so prior frame content doesn't leak. *)
+    plain spaces so prior frame content doesn't leak.
+
+    History: this used to treat [max_cols] as byte count.
+    Multi-byte graphemes (box-drawing, `·`, `●`, etc.) consume
+    more bytes than cells, so UTF-8 heavy content got truncated
+    mid-line well before the nominal column limit. The count is
+    now display-cell-aware via [Grapheme.truncate_to_width]. *)
 let render_line ~target_row ~target_col ~max_cols ~line
     ~(spans : Markdown.span list) =
 	Terminal.move ~row:target_row ~col:target_col;
@@ -502,19 +508,20 @@ let render_line ~target_row ~target_col ~max_cols ~line
 		(fun (span : Markdown.span) ->
 			if !remaining > 0 then begin
 				let span_len = span.stop - span.start in
-				let emit_len =
-					if span_len < !remaining then span_len else !remaining
-				in
-				if emit_len > 0 then begin
-					let chunk = String.sub line span.start emit_len in
-					let ansi = Theme.style_to_ansi span.style in
-					if ansi <> "" then begin
-						Terminal.write ansi;
-						Terminal.write chunk;
-						Terminal.write Theme.reset
-					end else
-						Terminal.write chunk;
-					remaining := !remaining - emit_len
+				if span_len > 0 then begin
+					let raw = String.sub line span.start span_len in
+					let chunk = Grapheme.truncate_to_width raw !remaining in
+					let chunk_cells = Grapheme.display_width chunk in
+					if chunk_cells > 0 then begin
+						let ansi = Theme.style_to_ansi span.style in
+						if ansi <> "" then begin
+							Terminal.write ansi;
+							Terminal.write chunk;
+							Terminal.write Theme.reset
+						end else
+							Terminal.write chunk;
+						remaining := !remaining - chunk_cells
+					end
 				end
 			end)
 		spans;
