@@ -24,6 +24,25 @@ type render_mode =
 			prefix_rest  : string;
 			prefix_style : Theme.style option;
 		}
+	| Spans of {
+			row_spans : doc_row:int -> line:string -> Markdown.span list;
+					(** Supplies styled-span segments for one logical
+					    row of the pane's buffer. [doc_row] is the
+					    0-based line index in [Buf.doc]; [line] is
+					    that row's raw UTF-8 text. Return a list of
+					    spans whose byte offsets refer to [line];
+					    gaps between spans render with
+					    [fallback_style]. *)
+			fallback_style : Theme.style;
+					(** Style applied to bytes not covered by any
+					    entry in [row_spans]'s return. Typically
+					    [Theme.plain] unless the pane wants tinted
+					    body text. *)
+		}
+(** v0.3.0: [Spans] supplements [Markdown] and [Plain] for panes
+    that need per-row inline styling without implementing their
+    own tokenizer. Consumers: LMI Self-Inspect (doc 25 Phase 5)
+    which colors diff glyphs (▲ ↑ ↓ + ✗) per memory-index row. *)
 
 type pane = {
 	buf         : Buf.t;

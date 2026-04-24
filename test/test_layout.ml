@@ -579,4 +579,85 @@ let () =
 		(* "hi" + 8 spaces should appear somewhere in the output *)
 		assert (contains out "hi        "));
 
+	(* v0.3.0: Spans render_mode *)
+
+	test "Spans mode renders caller-supplied spans" (fun () ->
+		(* A two-line doc. The first line has a green span over
+		   bytes [0,5); row_spans returns that span. Second line
+		   returns empty spans, entire row goes to fallback_style. *)
+		let doc = Doc.of_string "hello world\ngoodbye" in
+		let buf = Buf.of_doc doc in
+		let theme = Theme.default in
+		let green = theme.Theme.chrome.warning in
+		let row_spans ~doc_row ~line =
+			match doc_row with
+			| 0 ->
+				let end_ = min 5 (String.length line) in
+				if end_ = 0 then []
+				else [ { Markdown.start = 0; stop = end_; style = green } ]
+			| _ -> []
+		in
+		let pane = {
+			Layout.buf;
+			viewport = Viewport.make ~rows:0 ~cols:0;
+			title = None;
+			render_mode = Layout.Spans {
+				row_spans;
+				fallback_style = Theme.plain;
+			};
+			min_rows = 0;
+			content_inset_top = 0;
+			content_inset_bottom = 0;
+			content_inset_left = 0;
+			content_inset_right = 0;
+		} in
+		let t = { Layout.root = Leaf pane; focus_path = [] } in
+		let r = Rect.make ~row:0 ~col:0 ~rows:2 ~cols:20 in
+		let out, _cursor = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme)
+		in
+		(* Content bytes appear verbatim (render_line writes UTF-8
+		   directly; style codes surround but don't replace the
+		   text). Both "hello" and "world" and "goodbye" should be
+		   in the output buffer. *)
+		assert (contains out "hello");
+		assert (contains out "world");
+		assert (contains out "goodbye"));
+
+	test "Spans mode fills gaps between caller spans" (fun () ->
+		(* row_spans returns ONLY a span for bytes [0,5) on row 0.
+		   The renderer must fill bytes [5,11) with fallback_style
+		   so the entire line renders — confirming the gap-fill
+		   logic works (without it, render_line drops unspanned
+		   bytes per its contract). *)
+		let doc = Doc.of_string "abcdeFGHIJK" in
+		let buf = Buf.of_doc doc in
+		let theme = Theme.default in
+		let row_spans ~doc_row:_ ~line:_ =
+			[ { Markdown.start = 0; stop = 5;
+			    style = theme.Theme.chrome.warning } ]
+		in
+		let pane = {
+			Layout.buf;
+			viewport = Viewport.make ~rows:0 ~cols:0;
+			title = None;
+			render_mode = Layout.Spans {
+				row_spans;
+				fallback_style = Theme.plain;
+			};
+			min_rows = 0;
+			content_inset_top = 0;
+			content_inset_bottom = 0;
+			content_inset_left = 0;
+			content_inset_right = 0;
+		} in
+		let t = { Layout.root = Leaf pane; focus_path = [] } in
+		let r = Rect.make ~row:0 ~col:0 ~rows:1 ~cols:20 in
+		let out, _cursor = Terminal.with_capture (fun () ->
+			Layout.render t ~rect:r ~theme)
+		in
+		(* The uppercase tail MUST render despite being outside
+		   the caller's spans — proves fallback gap-fill works. *)
+		assert (contains out "FGHIJK"));
+
 	print_endline "test_layout done"

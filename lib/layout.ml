@@ -7,6 +7,10 @@ type render_mode =
 		prefix_rest  : string;
 		prefix_style : Theme.style option;
 	}
+	| Spans of {
+		row_spans : doc_row:int -> line:string -> Markdown.span list;
+		fallback_style : Theme.style;
+	}
 
 type pane = {
 	buf         : Buf.t;
@@ -574,6 +578,7 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 			match pane.render_mode with
 			| Markdown -> total_lines
 			| Plain _ -> max 1 total_lines
+			| Spans _ -> max 1 total_lines
 		in
 		let screen_row = ref 0 in
 		let doc_row = ref top in
@@ -634,6 +639,52 @@ let render_content (pane : pane) (rect : Rect.t) ~theme ~focused
 							else []
 						in
 						segments, prefix_len, line_text, prefix_span @ rest_span
+				| Spans { row_spans; fallback_style } ->
+						(* Spans mode: caller supplies per-row spans
+						   directly — no prefix, no Markdown state.
+						   Gaps between caller-supplied spans are
+						   filled with [fallback_style] so every byte
+						   renders (render_line drops unspanned
+						   bytes — doc 25 Phase 2 caught this with
+						   Plain's prefix_span / rest_span pattern). *)
+						let line_text = line in
+						let line_text_len = String.length line_text in
+						let user_spans =
+							row_spans ~doc_row:!doc_row ~line:line_text
+						in
+						let sorted =
+							List.sort (fun (a : Markdown.span) b ->
+								compare a.start b.start)
+								user_spans
+						in
+						(* Fill gaps with fallback. *)
+						let filled = ref [] in
+						let cursor = ref 0 in
+						List.iter (fun (s : Markdown.span) ->
+							if s.start > !cursor then
+								filled :=
+									{ Markdown.start = !cursor;
+									  stop = s.start;
+									  style = fallback_style }
+									:: !filled;
+							filled := s :: !filled;
+							cursor := max !cursor s.stop)
+							sorted;
+						if !cursor < line_text_len then
+							filled :=
+								{ Markdown.start = !cursor;
+								  stop = line_text_len;
+								  style = fallback_style }
+								:: !filled;
+						let spans = List.rev !filled in
+						let segments =
+							if pane.viewport.Viewport.wrap then
+								Viewport.wrap_line line_text wrap_width
+							else
+								[{ Viewport.start_gi = 0;
+								   end_gi = Grapheme.count line_text }]
+						in
+						segments, 0, line_text, spans
 			in
 			
 			let selection_spans =
