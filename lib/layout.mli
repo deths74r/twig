@@ -32,7 +32,20 @@ type render_mode =
 					    that row's raw UTF-8 text. Return a list of
 					    spans whose byte offsets refer to [line];
 					    gaps between spans render with
-					    [fallback_style]. *)
+					    [fallback_style].
+
+					    Contract: spans MUST be non-overlapping and
+					    all offsets must fall within [[0,
+					    String.length line]]. Overlapping spans
+					    produce undefined output — [render_line]
+					    writes span substrings sequentially without
+					    re-positioning the cursor, so a span
+					    covering [[3, 8)] layered after one
+					    covering [[0, 5)] prints the second
+					    substring AFTER the first, not over it.
+					    Multi-style runs should be expressed as a
+					    flat sequence of adjacent, non-overlapping
+					    spans. *)
 			fallback_style : Theme.style;
 					(** Style applied to bytes not covered by any
 					    entry in [row_spans]'s return. Typically
